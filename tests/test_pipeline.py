@@ -321,3 +321,25 @@ class OpenSkyBudgetTest(unittest.TestCase):
                 raise OpenSkyLimit("429")
         rows, counts = featured.collect(C(), [("CYYZ", "CYYC")], [dt.date(2026, 11, 20)])
         self.assertEqual((rows, counts), ([], {"CYYZ-CYYC": 0}))
+
+
+class DataHygieneTest(unittest.TestCase):
+    def test_one_off_diversion_is_dropped(self):
+        d = 86400
+        rows = [["a", "ACA824", "CYYZ", "LEMD", k * d + 3600, k * d + 30000] for k in range(6)]
+        rows.append(["a", "ACA824", "CYYZ", "EHAM", 6 * d + 3600, 6 * d + 30000])          # one-off
+        rows += [["b", "KLM692", "CYYZ", "EHAM", k * d + 7200, k * d + 33000] for k in range(7)]
+        rows += [["c", "ABC1", "CYYZ", "KJFK", k * d, k * d + 5000] for k in (0, 2, 4)]    # alternating
+        rows += [["c", "ABC1", "CYYZ", "KBOS", k * d, k * d + 5000] for k in (1, 3)]
+        kept = {(r[1], r[3]) for r in flights.drop_diversions(rows)}
+        self.assertEqual(kept, {("ACA824", "LEMD"), ("KLM692", "EHAM"), ("ABC1", "KJFK"), ("ABC1", "KBOS")})
+
+    def test_real_build_removes_leftover_demo_flight_files(self):
+        from pipeline import build, demo
+        out = Path(tempfile.mkdtemp())
+        demo.build_demo(out)
+        self.assertTrue((out / "flights" / "CYYZ.json").exists())
+        removed = build.clear_generated_flights(out)
+        self.assertIn("airports.json", removed)
+        self.assertFalse(any((out / "flights").glob("*.json")))
+        self.assertFalse((out / "featured.json").exists())

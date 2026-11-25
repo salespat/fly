@@ -61,6 +61,12 @@ OpenSky only records past flights. Each day the pipeline fetches yesterday's fli
 
 `featured_routes.json` lists routes that always appear as one-click "Popular routes" chips and are always offered in the airport dropdowns. Currently: Toronto–Calgary and Toronto–Amsterdam, in both directions. For these routes the pipeline also queries OpenSky's per-airport departure and arrival lists, and joins the two halves of flights that OpenSky splits on long ocean crossings. This makes them much less likely to be missing. To change them, edit the file (IATA codes such as `YYZ` work) and push. The next build picks up the change.
 
+### Generated data is never committed
+
+Everything in `site/data/` except `aircraft.json` is created by the build and must not be in the repo. Each real build deletes leftover flight files before it starts. This means demo files uploaded by mistake can't be published as real flights. If a build can't get any flight data, it fails and the previous live version stays up.
+
+The index also drops one-off destinations for a flight number (diversions, swapped aircraft). For example, if a flight goes to Madrid on 6 days and Amsterdam on 1, Amsterdam is ignored.
+
 ### OpenSky credits and HTTP 429
 
 OpenSky gives each account a daily allowance of credits for flight data: 400 without login, 4,000 with a standard account and 8,000 for active feeders. Requests for past days cost about 30 credits each, so a full first-time download of 7 days uses most of a standard allowance. When the allowance runs out, OpenSky answers **HTTP 429**.
@@ -90,7 +96,7 @@ Known gaps: routes with weak ADS-B coverage (oceans, parts of Africa and Asia) m
 
 ```bash
 python -m unittest discover -s tests -t . -p "test_*.py"
-python -m pipeline.build --demo && node --test tests/score.test.mjs tests/integration.test.mjs
+python -m pipeline.build --demo --out /tmp/demo-data && DEMO_DATA=/tmp/demo-data node --test tests/score.test.mjs tests/integration.test.mjs
 ```
 
 The workflow runs the unit tests before every build. If the real-data build fails, the deploy is skipped and the previous version of the site stays live.

@@ -5,13 +5,14 @@ import { readFileSync } from "node:fs";
 import { gunzipSync } from "node:zlib";
 import * as S from "../site/js/score.js";
 
-const D = new URL("../site/data/", import.meta.url);
+// Demo data folder: $DEMO_DATA if set (GitHub Actions builds it in /tmp/demo-data), else site/data.
+const D = process.env.DEMO_DATA ? new URL(`file://${process.env.DEMO_DATA.replace(/\/?$/, "/")}`) : new URL("../site/data/", import.meta.url);
 const J = (p) => JSON.parse(readFileSync(new URL(p, D)));
 
 test("YYZ -> YVR end-to-end on demo data", () => {
   const man = J("turb/manifest.json");
   const airports = new Map(J("airports.json").map((a) => [a[0], { icao: a[0], lat: a[4], lon: a[5], tz: a[6] }]));
-  const ac = J("aircraft.json");
+  const ac = JSON.parse(readFileSync(new URL("../site/data/aircraft.json", import.meta.url))); // committed, not generated
   const sig = J("sigmets.json").features;
   const rows = J("flights/CYYZ.json").dest.CYVR;
   const timesMs = man.times.map((t) => Date.parse(t.t)).sort((a, b) => a - b);

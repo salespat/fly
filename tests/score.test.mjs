@@ -4,6 +4,9 @@ import { readFileSync } from "node:fs";
 import { gunzipSync } from "node:zlib";
 import * as S from "../site/js/score.js";
 
+// Demo data folder: $DEMO_DATA if set (GitHub Actions builds it in /tmp/demo-data), else site/data.
+const DEMO = process.env.DEMO_DATA ? new URL(`file://${process.env.DEMO_DATA.replace(/\/?$/, "/")}`) : new URL("../site/data/", import.meta.url);
+
 const YYZ = { lat: 43.6772, lon: -79.6306 }, YVR = { lat: 49.1939, lon: -123.1844 };
 const NRT = { lat: 35.772, lon: 140.393 };
 
@@ -103,8 +106,8 @@ test("needed grid times cover the flight", () => {
 });
 
 test("demo grid files decode with the manifest", () => {
-  const man = JSON.parse(readFileSync(new URL("../site/data/turb/manifest.json", import.meta.url)));
-  const raw = gunzipSync(readFileSync(new URL(`../site/data/${man.times[0].file}`, import.meta.url)));
+  const man = JSON.parse(readFileSync(new URL("turb/manifest.json", DEMO)));
+  const raw = gunzipSync(readFileSync(new URL(man.times[0].file, DEMO)));
   const layers = S.decodeGrid(new Uint8Array(raw), man);
   assert.equal(layers.length, 3);
   const v = S.sampleLevels(layers, man, 47, -100, 360);

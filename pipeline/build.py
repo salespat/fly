@@ -16,9 +16,24 @@ from pathlib import Path
 from .common import ROOT, log, write_json
 
 
+def clear_generated_flights(out: Path) -> list[str]:
+    """Delete flight files left in the output folder (e.g. demo data that was committed to the
+    repo) so only data produced by this run can ever be published as real."""
+    removed = []
+    for p in [*(out / "flights").glob("*.json"), out / "airports.json", out / "featured.json"]:
+        if p.exists():
+            p.unlink()
+            removed.append(str(p.relative_to(out)))
+    if removed:
+        log.info("Removed %d stale flight files before building: %s", len(removed), ", ".join(removed[:5]))
+    return removed
+
+
 def build_real(out: Path, skip_flights: bool) -> dict:
     from . import flights, refdata, sigmets, turbulence
     status: dict = {"demo": False, "errors": []}
+    if not skip_flights:
+        clear_generated_flights(out)
     try:
         m = turbulence.run(out)
         status["turbulence"] = {"source": m["source"], "times": len(m["times"])}

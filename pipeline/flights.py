@@ -140,12 +140,30 @@ def flight_number(callsign: str, airlines: dict[str, list]) -> tuple[str, str]:
     return "", name
 
 
+def drop_diversions(rows: list[list]) -> list[list]:
+    """Remove one-off destinations for a callsign (diversions, swapped aircraft, reused callsigns).
+
+    A callsign is counted once per UTC day per destination. From each origin we keep only
+    destinations flown on at least half as many days as that callsign's main destination,
+    e.g. ACA824 to Madrid on 6 days and to Amsterdam on 1 day -> Amsterdam is dropped,
+    while a flight that alternates between two cities on different weekdays is kept."""
+    days: dict = defaultdict(lambda: defaultdict(set))
+    for r in rows:
+        days[(r[2], r[1])][r[3]].add(r[4] // 86400)
+    keep = set()
+    for (dep, cs), by_arr in days.items():
+        top = max(len(v) for v in by_arr.values())
+        keep.update((dep, cs, arr) for arr, v in by_arr.items() if len(v) * 2 >= top)
+    return [r for r in rows if (r[2], r[1], r[3]) in keep]
+
+
 def build_index(days: list[dt.date], airports: dict, airlines: dict, types: dict,
                 days_dir: Path = DAYS_DIR, extra_rows: list[list] | None = None) -> dict[str, dict]:
     """origin ICAO -> {dest ICAO -> [[callsign, flightNo, airline, [[wd, depMin, durMin, type], ...]]]}"""
     occ: dict = defaultdict(lambda: defaultdict(lambda: defaultdict(dict)))
     rows = [r for day in sorted(days) for r in read_json(days_dir / f"{day.isoformat()}.json.gz", [])]
     rows += sorted(extra_rows or [], key=lambda r: r[4])
+    rows = drop_diversions(rows)
     for icao24, cs, dep, arr, first, last in rows:  # older first so newer days overwrite the same weekday
         if dep not in airports or arr not in airports:
             continue
