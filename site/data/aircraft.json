@@ -1,0 +1,421 @@
+{
+ "classDefault": {
+  "wide": 0.88,
+  "narrow": 1.0,
+  "regional": 1.12,
+  "turboprop": 1.25
+ },
+ "tips": {
+  "wide": "Pick a seat over the wing, roughly the front of the main economy cabin just behind the over-wing exits. Avoid the last 10 rows.",
+  "narrow": "Pick a seat over the wing, usually near the over-wing exit rows, roughly a third of the way back in economy. The last rows feel bumps the most.",
+  "regional": "Sit over or just ahead of the wing. On rear-engine jets (CRJ), the rows around the wing are smoother but louder near the back.",
+  "turboprop": "Sit in the middle rows under the wing. Turboprops fly lower and feel more bumps; the rows right at the propellers are the loudest."
+ },
+ "types": {
+  "A388": {
+   "name": "Airbus A380-800",
+   "cls": "wide",
+   "factor": 0.82,
+   "wing": [
+    0.4,
+    0.6
+   ]
+  },
+  "B748": {
+   "name": "Boeing 747-8",
+   "cls": "wide",
+   "factor": 0.84,
+   "wing": [
+    0.42,
+    0.62
+   ]
+  },
+  "B744": {
+   "name": "Boeing 747-400",
+   "cls": "wide",
+   "factor": 0.85,
+   "wing": [
+    0.42,
+    0.62
+   ]
+  },
+  "B77W": {
+   "name": "Boeing 777-300ER",
+   "cls": "wide",
+   "factor": 0.85,
+   "wing": [
+    0.38,
+    0.56
+   ]
+  },
+  "B77L": {
+   "name": "Boeing 777-200LR",
+   "cls": "wide",
+   "factor": 0.86,
+   "wing": [
+    0.4,
+    0.6
+   ]
+  },
+  "B772": {
+   "name": "Boeing 777-200",
+   "cls": "wide",
+   "factor": 0.87,
+   "wing": [
+    0.4,
+    0.6
+   ]
+  },
+  "B779": {
+   "name": "Boeing 777-9",
+   "cls": "wide",
+   "factor": 0.84,
+   "wing": [
+    0.38,
+    0.55
+   ]
+  },
+  "A35K": {
+   "name": "Airbus A350-1000",
+   "cls": "wide",
+   "factor": 0.86,
+   "wing": [
+    0.38,
+    0.56
+   ]
+  },
+  "A359": {
+   "name": "Airbus A350-900",
+   "cls": "wide",
+   "factor": 0.88,
+   "wing": [
+    0.4,
+    0.58
+   ]
+  },
+  "B78X": {
+   "name": "Boeing 787-10",
+   "cls": "wide",
+   "factor": 0.88,
+   "wing": [
+    0.38,
+    0.56
+   ]
+  },
+  "B789": {
+   "name": "Boeing 787-9",
+   "cls": "wide",
+   "factor": 0.89,
+   "wing": [
+    0.4,
+    0.58
+   ]
+  },
+  "B788": {
+   "name": "Boeing 787-8",
+   "cls": "wide",
+   "factor": 0.9,
+   "wing": [
+    0.42,
+    0.6
+   ]
+  },
+  "A339": {
+   "name": "Airbus A330-900neo",
+   "cls": "wide",
+   "factor": 0.9,
+   "wing": [
+    0.4,
+    0.58
+   ]
+  },
+  "A333": {
+   "name": "Airbus A330-300",
+   "cls": "wide",
+   "factor": 0.9,
+   "wing": [
+    0.4,
+    0.58
+   ]
+  },
+  "A332": {
+   "name": "Airbus A330-200",
+   "cls": "wide",
+   "factor": 0.91,
+   "wing": [
+    0.42,
+    0.6
+   ]
+  },
+  "B763": {
+   "name": "Boeing 767-300",
+   "cls": "wide",
+   "factor": 0.93,
+   "wing": [
+    0.4,
+    0.6
+   ]
+  },
+  "B764": {
+   "name": "Boeing 767-400",
+   "cls": "wide",
+   "factor": 0.92,
+   "wing": [
+    0.38,
+    0.57
+   ]
+  },
+  "B752": {
+   "name": "Boeing 757-200",
+   "cls": "narrow",
+   "factor": 0.95,
+   "wing": [
+    0.38,
+    0.56
+   ]
+  },
+  "B753": {
+   "name": "Boeing 757-300",
+   "cls": "narrow",
+   "factor": 0.95,
+   "wing": [
+    0.36,
+    0.53
+   ]
+  },
+  "A21N": {
+   "name": "Airbus A321neo",
+   "cls": "narrow",
+   "factor": 0.98,
+   "wing": [
+    0.38,
+    0.55
+   ]
+  },
+  "A321": {
+   "name": "Airbus A321",
+   "cls": "narrow",
+   "factor": 0.98,
+   "wing": [
+    0.38,
+    0.55
+   ]
+  },
+  "A20N": {
+   "name": "Airbus A320neo",
+   "cls": "narrow",
+   "factor": 1.0,
+   "wing": [
+    0.36,
+    0.56
+   ]
+  },
+  "A320": {
+   "name": "Airbus A320",
+   "cls": "narrow",
+   "factor": 1.0,
+   "wing": [
+    0.36,
+    0.56
+   ]
+  },
+  "A19N": {
+   "name": "Airbus A319neo",
+   "cls": "narrow",
+   "factor": 1.02,
+   "wing": [
+    0.34,
+    0.56
+   ]
+  },
+  "A319": {
+   "name": "Airbus A319",
+   "cls": "narrow",
+   "factor": 1.02,
+   "wing": [
+    0.34,
+    0.56
+   ]
+  },
+  "B39M": {
+   "name": "Boeing 737 MAX 9",
+   "cls": "narrow",
+   "factor": 0.98,
+   "wing": [
+    0.37,
+    0.55
+   ]
+  },
+  "B38M": {
+   "name": "Boeing 737 MAX 8",
+   "cls": "narrow",
+   "factor": 1.0,
+   "wing": [
+    0.36,
+    0.56
+   ]
+  },
+  "B739": {
+   "name": "Boeing 737-900",
+   "cls": "narrow",
+   "factor": 0.98,
+   "wing": [
+    0.37,
+    0.55
+   ]
+  },
+  "B738": {
+   "name": "Boeing 737-800",
+   "cls": "narrow",
+   "factor": 1.0,
+   "wing": [
+    0.36,
+    0.56
+   ]
+  },
+  "B737": {
+   "name": "Boeing 737-700",
+   "cls": "narrow",
+   "factor": 1.02,
+   "wing": [
+    0.34,
+    0.56
+   ]
+  },
+  "BCS3": {
+   "name": "Airbus A220-300",
+   "cls": "narrow",
+   "factor": 1.04,
+   "wing": [
+    0.36,
+    0.56
+   ]
+  },
+  "BCS1": {
+   "name": "Airbus A220-100",
+   "cls": "narrow",
+   "factor": 1.06,
+   "wing": [
+    0.34,
+    0.56
+   ]
+  },
+  "E295": {
+   "name": "Embraer E195-E2",
+   "cls": "regional",
+   "factor": 1.06,
+   "wing": [
+    0.38,
+    0.58
+   ]
+  },
+  "E195": {
+   "name": "Embraer E195",
+   "cls": "regional",
+   "factor": 1.08,
+   "wing": [
+    0.38,
+    0.58
+   ]
+  },
+  "E290": {
+   "name": "Embraer E190-E2",
+   "cls": "regional",
+   "factor": 1.08,
+   "wing": [
+    0.38,
+    0.58
+   ]
+  },
+  "E190": {
+   "name": "Embraer E190",
+   "cls": "regional",
+   "factor": 1.1,
+   "wing": [
+    0.38,
+    0.58
+   ]
+  },
+  "E75L": {
+   "name": "Embraer E175",
+   "cls": "regional",
+   "factor": 1.12,
+   "wing": [
+    0.38,
+    0.6
+   ]
+  },
+  "E75S": {
+   "name": "Embraer E175",
+   "cls": "regional",
+   "factor": 1.12,
+   "wing": [
+    0.38,
+    0.6
+   ]
+  },
+  "E170": {
+   "name": "Embraer E170",
+   "cls": "regional",
+   "factor": 1.13,
+   "wing": [
+    0.38,
+    0.6
+   ]
+  },
+  "CRJ9": {
+   "name": "Bombardier CRJ900",
+   "cls": "regional",
+   "factor": 1.15,
+   "wing": [
+    0.45,
+    0.65
+   ]
+  },
+  "CRJ7": {
+   "name": "Bombardier CRJ700",
+   "cls": "regional",
+   "factor": 1.17,
+   "wing": [
+    0.45,
+    0.65
+   ]
+  },
+  "CRJ2": {
+   "name": "Bombardier CRJ200",
+   "cls": "regional",
+   "factor": 1.2,
+   "wing": [
+    0.45,
+    0.66
+   ]
+  },
+  "DH8D": {
+   "name": "De Havilland Dash 8-400",
+   "cls": "turboprop",
+   "factor": 1.25,
+   "wing": [
+    0.3,
+    0.48
+   ]
+  },
+  "AT76": {
+   "name": "ATR 72-600",
+   "cls": "turboprop",
+   "factor": 1.27,
+   "wing": [
+    0.32,
+    0.5
+   ]
+  },
+  "AT75": {
+   "name": "ATR 72-500",
+   "cls": "turboprop",
+   "factor": 1.27,
+   "wing": [
+    0.32,
+    0.5
+   ]
+  }
+ }
+}

@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SmoothRoute: find the smoothest flight on your route</title>
+  <meta name="description" content="Compare every flight on a route by forecast turbulence and find the smoothest flight, aircraft and seat.">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="top">
+    <div class="wrap">
+      <a class="brand" href="./"><span class="logo" aria-hidden="true">≈</span> SmoothRoute</a>
+      <span class="tag">Which flight on your route will be the smoothest?</span>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <div id="banner" class="banner" hidden></div>
+
+    <form id="search" class="search" autocomplete="off">
+      <label>From
+        <input id="from" list="from-list" placeholder="e.g. YYZ or Toronto" required>
+        <datalist id="from-list"></datalist>
+      </label>
+      <button type="button" id="swap" class="swap" title="Swap airports" aria-label="Swap airports">⇄</button>
+      <label>To
+        <input id="to" list="to-list" placeholder="e.g. YVR or Vancouver" required>
+        <datalist id="to-list"></datalist>
+      </label>
+      <button type="submit" class="go">Find smoothest flight</button>
+    </form>
+    <p id="meta" class="meta"></p>
+
+    <section id="results" class="results" aria-live="polite"></section>
+
+    <section id="detail" class="detail" hidden>
+      <div class="detail-grid">
+        <div>
+          <h2 id="detail-title"></h2>
+          <div id="map" class="map" role="img" aria-label="Route map coloured by forecast turbulence"></div>
+          <div class="legend" id="legend"></div>
+        </div>
+        <div>
+          <h3>Turbulence along the flight</h3>
+          <div id="profile"></div>
+          <h3>Best seats</h3>
+          <div id="seats"></div>
+          <div id="warnings"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="how">
+      <h2>How it works</h2>
+      <ol>
+        <li><b>Flights:</b> we look at which airline flights actually flew your route on the same weekday last week (OpenSky Network) and assume they operate again, usually with the same aircraft type.</li>
+        <li><b>Turbulence:</b> each flight's path (great circle, typical cruise altitude) is checked against the latest NOAA turbulence forecast at the time the plane will be there.</li>
+        <li><b>Aircraft:</b> bigger, heavier planes feel the same air as less bumpy, so we adjust for aircraft type.</li>
+        <li><b>Seats:</b> seats over the wing, near the plane's centre of gravity, move the least.</li>
+      </ol>
+      <p class="fine">For comfort planning only, not a safety tool. Forecasts cover roughly the next 36 hours, and pilots routinely change altitude or route to avoid turbulence. Aircraft types and times are based on last week's operations and can change. Climb and descent are not scored.</p>
+    </section>
+  </main>
+
+  <footer class="wrap foot" id="attrib">
+    Data: NOAA/NWS Aviation Weather Center, NOAA NCEP, OpenSky Network, OurAirports, OpenFlights. Map © OpenStreetMap contributors © CARTO.
+  </footer>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js" defer></script>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

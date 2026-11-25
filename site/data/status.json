@@ -1,0 +1,14 @@
+{
+  "demo": true,
+  "errors": [],
+  "turbulence": {
+    "source": "demo",
+    "times": 15
+  },
+  "flights": {
+    "origins": 4,
+    "flights": 20
+  },
+  "sigmets": 1,
+  "built": "2026-11-24T18:05Z"
+}
