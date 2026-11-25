@@ -1,0 +1,90 @@
+name: Build & deploy
+
+on:
+  schedule:
+    - cron: "40 */3 * * *"      # every 3 hours (GitHub may start scheduled runs late)
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pipeline/requirements.txt
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # Keeps the last 7 days of OpenSky history + reference data between runs
+      - name: Restore pipeline cache
+        uses: actions/cache/restore@v4
+        with:
+          path: pipeline/.cache
+          key: pipeline-${{ github.run_id }}
+          restore-keys: pipeline-
+
+      - name: Install
+        run: pip install -r pipeline/requirements.txt
+
+      - name: Unit tests
+        run: |
+          python -m unittest discover -s tests -t . -p "test_*.py"
+          python -m pipeline.build --demo --out /tmp/demo-data >/dev/null
+          node --test tests/score.test.mjs
+
+      - name: Build data
+        env:
+          OPENSKY_CLIENT_ID: ${{ secrets.OPENSKY_CLIENT_ID }}
+          OPENSKY_CLIENT_SECRET: ${{ secrets.OPENSKY_CLIENT_SECRET }}
+          WIFS_USERNAME: ${{ secrets.WIFS_USERNAME }}
+          WIFS_PASSWORD: ${{ secrets.WIFS_PASSWORD }}
+          TURB_SOURCE: ${{ vars.TURB_SOURCE || 'auto' }}
+          OPENSKY_MAX_NEW_DAYS: ${{ vars.OPENSKY_MAX_NEW_DAYS || '7' }}
+        run: |
+          if [ "${{ vars.DEMO_MODE }}" = "true" ]; then
+            python -m pipeline.build --demo
+          else
+            python -m pipeline.build
+          fi
+
+      - name: Save pipeline cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            pipeline/.cache
+            !pipeline/.cache/grib_tmp
+          key: pipeline-${{ github.run_id }}
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
