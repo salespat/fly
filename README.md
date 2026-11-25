@@ -61,6 +61,18 @@ OpenSky only records past flights. Each day the pipeline fetches yesterday's fli
 
 `featured_routes.json` lists routes that always appear as one-click "Popular routes" chips and are always offered in the airport dropdowns. Currently: Toronto–Calgary and Toronto–Amsterdam, in both directions. For these routes the pipeline also queries OpenSky's per-airport departure and arrival lists, and joins the two halves of flights that OpenSky splits on long ocean crossings. This makes them much less likely to be missing. To change them, edit the file (IATA codes such as `YYZ` work) and push. The next build picks up the change.
 
+### OpenSky credits and HTTP 429
+
+OpenSky gives each account a daily allowance of credits for flight data: 400 without login, 4,000 with a standard account and 8,000 for active feeders. Requests for past days cost about 30 credits each, so a full first-time download of 7 days uses most of a standard allowance. When the allowance runs out, OpenSky answers **HTTP 429**.
+
+The pipeline (`pipeline/opensky.py`) handles this:
+- it keeps its own estimated daily budget (3,500 credits by default, or 350 without API credentials) and stops before going over it;
+- on a 429 it stops calling OpenSky at once and doesn't try again until OpenSky's "retry after" time has passed, even across builds;
+- every 2-hour block is saved as soon as it arrives, so an interrupted day resumes where it stopped instead of starting over;
+- featured routes are fetched first, in 2-day windows (the same price as 1 day).
+
+A 429 no longer breaks anything: the site is rebuilt from the data already downloaded, and missing days are filled in on later runs. `site/data/status.json` → `flights.opensky` shows credits used, and whether downloads were stopped and why. If you are an OpenSky feeder (8,000 credits), set the repository variable `OPENSKY_DAILY_CREDITS` to `7500`.
+
 A day of tracking data is only saved when all twelve 2-hour blocks came back. Empty blocks (not processed yet by OpenSky) are retried on the next run, so no flights are silently lost.
 
 Known gaps: routes with weak ADS-B coverage (oceans, parts of Africa and Asia) may be missing. Alphanumeric callsigns (e.g. `RYR5UK`) can't be mapped to flight numbers, so the site shows the callsign instead.

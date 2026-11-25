@@ -9,6 +9,15 @@ from pathlib import Path
 import numpy as np
 
 os.environ.setdefault("SMOOTHROUTE_CACHE", tempfile.mkdtemp())
+try:
+    import requests  # noqa: F401
+except ImportError:  # minimal stand-in so the OpenSky client tests run without the package
+    import sys
+    import types
+    _rq = types.ModuleType("requests")
+    _rq.RequestException = type("RequestException", (Exception,), {})
+    _rq.get = _rq.post = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("network disabled in tests"))
+    sys.modules["requests"] = _rq
 from pipeline import flights, refdata, sigmets, turbulence as T  # noqa: E402
 from pipeline.common import write_json  # noqa: E402
 
@@ -183,17 +192,6 @@ class FeaturedRoutesTest(unittest.TestCase):
         ams = featured.match_route("CYYZ", "EHAM", deps, arrs)
         self.assertEqual(ams, [["b", "KLM692", "CYYZ", "EHAM", 1 * h, 8 * h + 1800]])
 
-    def test_empty_two_hour_block_means_day_is_not_cached(self):
-        class Client:
-            calls = 0
-            def flights_all(self, b, e):
-                Client.calls += 1
-                return [] if Client.calls == 5 else [{"icao24": "x", "callsign": "ACA1", "estDepartureAirport": "CYYZ",
-                                                      "estArrivalAirport": "CYYC", "firstSeen": b, "lastSeen": b + 4 * 3600}]
-        os.environ["OPENSKY_SLEEP"] = "0"
-        with self.assertRaises(RuntimeError):
-            flights.fetch_day(Client(), dt.date(2026, 11, 20))
-
     def test_featured_airports_listed_even_without_flights(self):
         out = Path(tempfile.mkdtemp())
         stats = flights.write_index({}, self.AIRPORTS, out, [dt.date(2026, 11, 20)],
@@ -202,3 +200,124 @@ class FeaturedRoutesTest(unittest.TestCase):
         self.assertEqual(codes, {"CYYZ": 1, "CYYC": 0, "EHAM": 0})
         self.assertEqual(json.loads((out / "featured.json").read_text())[1], {"from": "CYYZ", "to": "EHAM", "flights": 0})
         self.assertEqual(stats["airports"], 3)
+
+
+class FakeResp:
+    def __init__(self, status=200, data=None, headers=None):
+        self.status_code, self._data, self.headers = status, data, headers or {}
+
+    def json(self):
+        return self._data
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(self.status_code)
+
+
+class OpenSkyBudgetTest(unittest.TestCase):
+    def setUp(self):
+        os.environ["OPENSKY_SLEEP"] = "0"
+        self.tmp = Path(tempfile.mkdtemp())
+
+    def client(self, daily=1000):
+        from pipeline.opensky import OpenSkyClient
+        return OpenSkyClient(None, None, daily_credits=daily, ledger_path=self.tmp / "ledger.json")
+
+    def test_credit_cost_matches_opensky_table(self):
+        from pipeline.opensky import credit_cost
+        now, day = 1_800_000_000, 86400
+        old = now - 5 * day - (now % day)          # midnight UTC, five days ago
+        self.assertEqual(credit_cost(old, old + 7200, now), 30)
+        self.assertEqual(credit_cost(old, old + 2 * day, now), 30)
+        self.assertEqual(credit_cost(old, old + 3 * day, now), 180)
+        self.assertEqual(credit_cost(now - 3600, now, now), 4)
+
+    def test_429_stops_all_calls_and_is_remembered(self):
+        from unittest import mock
+        from pipeline.opensky import OpenSkyLimit
+        c = self.client()
+        with mock.patch("requests.get", return_value=FakeResp(429, headers={"X-Rate-Limit-Retry-After-Seconds": "7200"})) as g:
+            with self.assertRaises(OpenSkyLimit):
+                c.get("u", {"begin": 0, "end": 7200})
+            with self.assertRaises(OpenSkyLimit):
+                c.get("u", {"begin": 0, "end": 7200})
+            self.assertEqual(g.call_count, 1)                 # no retry storm
+        with mock.patch("requests.get") as g:                 # a later build in the same window
+            with self.assertRaises(OpenSkyLimit):
+                self.client().get("u", {"begin": 0, "end": 7200})
+            g.assert_not_called()
+
+    def test_budget_is_never_exceeded(self):
+        from unittest import mock
+        from pipeline.opensky import OpenSkyLimit
+        c = self.client(daily=70)
+        with mock.patch("requests.get", return_value=FakeResp(200, [])) as g:
+            c.get("u", {"begin": 0, "end": 7200})
+            c.get("u", {"begin": 0, "end": 7200})
+            with self.assertRaises(OpenSkyLimit):
+                c.get("u", {"begin": 0, "end": 7200})
+            self.assertEqual(g.call_count, 2)
+        self.assertEqual(self.client(daily=70).ledger["spent"], 60)   # persisted across runs
+
+    def test_interrupted_day_resumes_without_refetching(self):
+        from pipeline.opensky import OpenSkyLimit
+        day, calls = dt.date(2026, 11, 20), []
+
+        class C:
+            fail_at = 5
+
+            def get(self, url, params):
+                calls.append(params["begin"])
+                if len(calls) == C.fail_at:
+                    raise OpenSkyLimit("429")
+                b = params["begin"]
+                return [{"icao24": "x", "callsign": f"ACA{len(calls)}", "estDepartureAirport": "CYYZ",
+                         "estArrivalAirport": "CYYC", "firstSeen": b, "lastSeen": b + 4 * 3600}]
+        with self.assertRaises(OpenSkyLimit):
+            flights.fetch_day(C(), day, parts_dir=self.tmp)
+        self.assertEqual(len(calls), 5)
+        C.fail_at = 0
+        rows = flights.fetch_day(C(), day, parts_dir=self.tmp)
+        self.assertEqual(len(calls), 13)                       # only the 8 missing blocks
+        self.assertEqual(len(rows), 12)
+
+    def test_unprocessed_block_returns_none(self):
+        class C:
+            n = 0
+
+            def get(self, url, params):
+                C.n += 1
+                b = params["begin"]
+                return [] if C.n == 3 else [{"icao24": "x", "callsign": "ACA1", "estDepartureAirport": "CYYZ",
+                                             "estArrivalAirport": "CYYC", "firstSeen": b, "lastSeen": b + 4 * 3600}]
+        self.assertIsNone(flights.fetch_day(C(), dt.date(2026, 11, 21), parts_dir=self.tmp))
+
+    def test_featured_airport_lookup_uses_two_day_windows(self):
+        from pipeline import featured
+        featured.AIRPORT_DIR = self.tmp / "ap"
+        spans = []
+
+        class C:
+            def get(self, url, params):
+                spans.append((params["end"] - params["begin"]) // 86400)
+                b = params["begin"]
+                return [{"icao24": "x", "callsign": f"ACA{k}{b // 86400 % 100}", "estDepartureAirport": "CYYZ",
+                         "estArrivalAirport": "CYYC", "firstSeen": b + k * 86400 + 3600,
+                         "lastSeen": b + k * 86400 + 5 * 3600} for k in range(spans[-1])]
+        days = [dt.date(2026, 11, d) for d in (17, 18, 19, 20, 21)]
+        rows = featured.fetch_airport_days(C(), "dep", "CYYZ", days)
+        self.assertEqual(spans, [2, 2, 1])
+        self.assertEqual(len(rows), 5)
+        featured.fetch_airport_days(C(), "dep", "CYYZ", days)   # all cached now
+        self.assertEqual(len(spans), 3)
+
+    def test_featured_collect_survives_429(self):
+        from pipeline import featured
+        from pipeline.opensky import OpenSkyLimit
+        featured.AIRPORT_DIR = self.tmp / "ap2"
+
+        class C:
+            def get(self, url, params):
+                raise OpenSkyLimit("429")
+        rows, counts = featured.collect(C(), [("CYYZ", "CYYC")], [dt.date(2026, 11, 20)])
+        self.assertEqual((rows, counts), ([], {"CYYZ-CYYC": 0}))

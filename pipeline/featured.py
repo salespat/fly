@@ -17,7 +17,8 @@ import os
 import time
 from pathlib import Path
 
-from .common import CACHE, ROOT, ensure_dir, http_get, log, read_json, write_json
+from .common import CACHE, ROOT, ensure_dir, log, read_json, write_json
+from .opensky import OpenSkyLimit
 
 DEPARTURE_URL = "https://opensky-network.org/api/flights/departure"
 ARRIVAL_URL = "https://opensky-network.org/api/flights/arrival"
@@ -54,33 +55,39 @@ def compact_partial(flights: list[dict]) -> list[list]:
     return out
 
 
-def _fetch(client, url: str, icao: str, begin: int, end: int) -> list[dict]:
-    r = http_get(url, params={"airport": icao, "begin": begin, "end": end},
-                 headers=client._headers(), timeout=120, ok_404=True)
-    return [] if r is None else (r.json() or [])
+def _day_of(ts: int) -> str:
+    return dt.datetime.fromtimestamp(ts, dt.timezone.utc).date().isoformat()
 
 
-def fetch_airport_day(client, kind: str, icao: str, day: dt.date) -> list[list]:
-    """kind: 'dep' or 'arr'. Cached per airport/day. One request per day (2h chunks as fallback)."""
+def fetch_airport_days(client, kind: str, icao: str, days: list[dt.date]) -> list[list]:
+    """All rows for airport `icao` ('dep' or 'arr') over `days`, cached per UTC day.
+
+    Missing days are requested in 2-day windows (OpenSky's maximum), which cost the
+    same credits as a single day. Rows are filed under the day of their departure
+    ('dep') or arrival ('arr') time, matching how OpenSky filters these endpoints."""
     ensure_dir(AIRPORT_DIR)
-    path = AIRPORT_DIR / f"{kind}_{icao}_{day.isoformat()}.json.gz"
-    if path.exists():
-        return read_json(path, [])
+    path = lambda d: AIRPORT_DIR / f"{kind}_{icao}_{d.isoformat()}.json.gz"
+    missing = sorted(d for d in days if not path(d).exists())
     url = DEPARTURE_URL if kind == "dep" else ARRIVAL_URL
-    start = int(dt.datetime(day.year, day.month, day.day, tzinfo=dt.timezone.utc).timestamp())
-    try:
-        raw = _fetch(client, url, icao, start, start + 86400)
-    except Exception as e:  # interval too long or transient error: retry in 2-hour pieces
-        log.info("OpenSky %s %s %s: full-day request failed (%s); using 2h chunks", kind, icao, day, e)
-        raw = []
-        for b in range(start, start + 86400, 7200):
-            raw += _fetch(client, url, icao, b, b + 7200)
-            time.sleep(float(os.environ.get("OPENSKY_SLEEP", "2")))
-    rows = compact_partial(raw)
-    if rows:  # never cache an empty day: it may simply not be processed yet
-        write_json(path, rows, gz=True)
-    time.sleep(float(os.environ.get("OPENSKY_SLEEP", "2")))
-    return rows
+    tcol = 4 if kind == "dep" else 5
+    i = 0
+    while i < len(missing):
+        d0 = missing[i]
+        span = 2 if i + 1 < len(missing) and missing[i + 1] == d0 + dt.timedelta(days=1) else 1
+        begin = int(dt.datetime(d0.year, d0.month, d0.day, tzinfo=dt.timezone.utc).timestamp())
+        rows = compact_partial(client.get(url, {"airport": icao, "begin": begin, "end": begin + span * 86400}))
+        for k in range(span):
+            d = d0 + dt.timedelta(days=k)
+            mine = [r for r in rows if _day_of(r[tcol]) == d.isoformat()]
+            if mine:  # never cache an empty day: it may simply not be processed yet
+                write_json(path(d), mine, gz=True)
+        i += span
+        time.sleep(float(os.environ.get("OPENSKY_SLEEP", "2")))
+    keep = {path(d).name for d in days}
+    for p in AIRPORT_DIR.glob(f"{kind}_{icao}_*.json.gz"):
+        if p.name not in keep:
+            p.unlink()
+    return [r for d in sorted(days) for r in read_json(path(d), [])]
 
 
 def match_route(o: str, d: str, deps: list[list], arrs: list[list]) -> list[list]:
@@ -108,26 +115,29 @@ def match_route(o: str, d: str, deps: list[list], arrs: list[list]) -> list[list
 
 
 def collect(client, routes: list[tuple[str, str]], days: list[dt.date]) -> tuple[list[list], dict]:
-    """Returns (rows, per-route flight counts)."""
+    """Returns (rows, per-route flight counts). Stops quietly when OpenSky credits run out."""
     rows, counts = [], {}
-    if not routes:
+    if not routes or not days:
         return rows, counts
-    cache: dict = {}
-    get = lambda kind, icao, day: cache.setdefault((kind, icao, day), _safe(client, kind, icao, day))
+    data: dict = {}
+    for kind, icao in [("dep", o) for o, _ in routes] + [("arr", d) for _, d in routes]:
+        if (kind, icao) in data:
+            continue
+        try:
+            data[(kind, icao)] = fetch_airport_days(client, kind, icao, days)
+        except OpenSkyLimit as e:
+            log.warning("Featured routes: %s; using cached data only", e)
+            data[(kind, icao)] = _cached(kind, icao, days)
+        except Exception as e:
+            log.warning("OpenSky %s %s failed: %s", kind, icao, e)
+            data[(kind, icao)] = _cached(kind, icao, days)
     for o, d in routes:
-        n = 0
-        for day in days:
-            got = match_route(o, d, get("dep", o, day), get("arr", d, day))
-            rows += got
-            n += len(got)
-        counts[f"{o}-{d}"] = n
-        log.info("Featured route %s->%s: %d flights over %d days", o, d, n, len(days))
+        got = match_route(o, d, data[("dep", o)], data[("arr", d)])
+        rows += got
+        counts[f"{o}-{d}"] = len(got)
+        log.info("Featured route %s->%s: %d flights over %d days", o, d, len(got), len(days))
     return rows, counts
 
 
-def _safe(client, kind, icao, day):
-    try:
-        return fetch_airport_day(client, kind, icao, day)
-    except Exception as e:
-        log.warning("OpenSky %s %s %s failed: %s", kind, icao, day, e)
-        return []
+def _cached(kind: str, icao: str, days: list[dt.date]) -> list[list]:
+    return [r for d in sorted(days) for r in read_json(AIRPORT_DIR / f"{kind}_{icao}_{d.isoformat()}.json.gz", [])]

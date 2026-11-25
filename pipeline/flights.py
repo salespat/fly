@@ -15,14 +15,15 @@ from __future__ import annotations
 import datetime as dt
 import os
 import re
+import shutil
 import statistics
 import time
 from collections import defaultdict
 from pathlib import Path
 
-from .common import CACHE, ensure_dir, http_get, log, read_json, write_json
+from .common import CACHE, ensure_dir, log, read_json, write_json
+from .opensky import OpenSkyClient, OpenSkyLimit
 
-TOKEN_URL = "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token"
 FLIGHTS_ALL_URL = "https://opensky-network.org/api/flights/all"
 CHUNK_S = 2 * 3600            # OpenSky limit: interval must not exceed two hours
 HISTORY_DAYS = 7              # one of each weekday
@@ -32,30 +33,8 @@ AIRLINE_CALLSIGN = re.compile(r"^([A-Z]{3})(\d{1,4})([A-Z]{0,2})$")
 DAYS_DIR = CACHE / "opensky_days"
 
 
-class OpenSkyClient:
-    """Minimal OAuth2 client-credentials client (tokens last ~30 min)."""
-
-    def __init__(self, client_id: str | None, client_secret: str | None):
-        self.client_id, self.client_secret = client_id, client_secret
-        self._token, self._exp = None, 0.0
-
-    def _headers(self) -> dict:
-        if not (self.client_id and self.client_secret):
-            return {}  # anonymous: far fewer credits, may be rejected for /flights/all
-        if time.time() > self._exp - 60:
-            import requests
-            r = requests.post(TOKEN_URL, timeout=30, data={
-                "grant_type": "client_credentials",
-                "client_id": self.client_id, "client_secret": self.client_secret})
-            r.raise_for_status()
-            j = r.json()
-            self._token, self._exp = j["access_token"], time.time() + j.get("expires_in", 1800)
-        return {"Authorization": f"Bearer {self._token}"}
-
-    def flights_all(self, begin: int, end: int) -> list[dict]:
-        r = http_get(FLIGHTS_ALL_URL, params={"begin": begin, "end": end},
-                     headers=self._headers(), timeout=120, ok_404=True)
-        return [] if r is None else (r.json() or [])
+def flights_all(client: OpenSkyClient, begin: int, end: int) -> list[dict]:
+    return client.get(FLIGHTS_ALL_URL, {"begin": begin, "end": end})
 
 
 def compact(flights: list[dict]) -> list[list]:
@@ -73,23 +52,34 @@ def compact(flights: list[dict]) -> list[list]:
     return out
 
 
-def fetch_day(client: OpenSkyClient, day: dt.date) -> list[list]:
+def fetch_day(client: OpenSkyClient, day: dt.date, parts_dir: Path | None = None) -> list[list] | None:
+    """Fetch one UTC day in 12 two-hour blocks. Each block is cached as soon as it arrives,
+    so an interrupted day (429, budget, unprocessed block) resumes where it stopped.
+    Returns the day's rows once all blocks are present, else None."""
+    pdir = ensure_dir((parts_dir or DAYS_DIR / "parts") / day.isoformat())
     start = int(dt.datetime(day.year, day.month, day.day, tzinfo=dt.timezone.utc).timestamp())
-    rows: list[list] = []
+    missing = 0
     for b in range(start, start + 86400, CHUNK_S):
-        raw = client.flights_all(b, b + CHUNK_S)
-        if not raw:  # worldwide traffic is never zero: this part isn't processed yet
-            raise RuntimeError(f"empty 2-hour block at {dt.datetime.fromtimestamp(b, dt.timezone.utc):%H:%M} UTC; will retry next run")
-        rows += compact(raw)
+        part = pdir / f"{(b - start) // 3600:02d}.json.gz"
+        if part.exists():
+            continue
+        raw = flights_all(client, b, b + CHUNK_S)  # OpenSkyLimit propagates to the caller
+        if not raw:  # worldwide traffic is never zero: this block isn't processed yet
+            log.warning("OpenSky: empty block %s %02d:00 UTC; will retry next run", day, (b - start) // 3600)
+            missing += 1
+            continue
+        write_json(part, compact(raw), gz=True)
         time.sleep(float(os.environ.get("OPENSKY_SLEEP", "2")))
-    # de-duplicate (a flight can straddle a chunk boundary)
-    seen, uniq = set(), []
-    for r in rows:
-        k = (r[0], r[1], r[4])
-        if k not in seen:
-            seen.add(k)
-            uniq.append(r)
-    return uniq
+    if missing:
+        return None
+    rows, seen = [], set()
+    for part in sorted(pdir.glob("*.json.gz")):
+        for r in read_json(part, []):
+            k = (r[0], r[1], r[4])  # a flight can straddle a block boundary
+            if k not in seen:
+                seen.add(k)
+                rows.append(r)
+    return rows
 
 
 def window_days(today: dt.date | None = None) -> tuple[list[dt.date], list[dt.date]]:
@@ -116,20 +106,25 @@ def update_history(client: OpenSkyClient, today: dt.date | None = None,
         log.info("OpenSky: fetching %s", day)
         try:
             rows = fetch_day(client, day)
+        except OpenSkyLimit as e:
+            log.warning("Stopping OpenSky downloads: %s (cached data is still used)", e)
+            break
         except Exception as e:
             log.warning("OpenSky fetch for %s failed: %s", day, e)
             continue
-        if rows:
+        if rows is not None:
             write_json(path, rows, gz=True)
+            shutil.rmtree(DAYS_DIR / "parts" / day.isoformat(), ignore_errors=True)
             fetched += 1
             log.info("OpenSky: %s -> %d airline flights", day, len(rows))
-        else:
-            log.warning("OpenSky returned no flights for %s (not processed yet?)", day)
     # prune old files
     keep = {f"{d.isoformat()}.json.gz" for d in wanted}
     for p in DAYS_DIR.glob("*.json.gz"):
         if p.name not in keep:
             p.unlink()
+    for p in (DAYS_DIR / "parts").glob("*"):
+        if f"{p.name}.json.gz" not in keep:
+            shutil.rmtree(p, ignore_errors=True)
     return sorted(d for d in wanted if (DAYS_DIR / f"{d.isoformat()}.json.gz").exists())
 
 
@@ -194,17 +189,19 @@ def write_index(index: dict, airports: dict, out_dir: Path, days: list[dt.date],
 
 def run(out_dir: Path, airports: dict, airlines: dict, types: dict) -> dict:
     client = OpenSkyClient(os.environ.get("OPENSKY_CLIENT_ID"), os.environ.get("OPENSKY_CLIENT_SECRET"))
-    days = update_history(client, max_new_days=int(os.environ.get("OPENSKY_MAX_NEW_DAYS", "7")))
     from . import featured
     routes = featured.load_routes(airports)
     _, ready = window_days()
+    # featured routes first: they are cheap and must be there for the presentation
     extra, counts = featured.collect(client, routes, ready)
+    days = update_history(client, max_new_days=int(os.environ.get("OPENSKY_MAX_NEW_DAYS", "7")))
     if not days and not extra:
         log.warning("No OpenSky history available; keeping previous flight index if any")
-        return {"days": [], "featured": counts}
+        return {"days": [], "featured": counts, "opensky": client.summary()}
     index = build_index(days, airports, airlines, types, extra_rows=extra)
     stats = write_index(index, airports, out_dir, days or ready, featured=routes)
     stats["days"] = [d.isoformat() for d in days]
     stats["featured"] = {f"{o}-{d}": len(index.get(o, {}).get(d, [])) for o, d in routes}
+    stats["opensky"] = client.summary()
     log.info("Flight index: %s", stats)
     return stats
