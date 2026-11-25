@@ -246,6 +246,12 @@ class OpenSkyBudgetTest(unittest.TestCase):
             with self.assertRaises(OpenSkyLimit):
                 self.client().get("u", {"begin": 0, "end": 7200})
             g.assert_not_called()
+        led = json.loads((self.tmp / "ledger.json").read_text())   # once the wait is over...
+        led["blocked_until"] = 1
+        (self.tmp / "ledger.json").write_text(json.dumps(led))
+        with mock.patch("requests.get", return_value=FakeResp(200, [])) as g:
+            self.client().get("u", {"begin": 0, "end": 7200})        # ...requests resume with a fresh budget
+            self.assertEqual(g.call_count, 1)
 
     def test_budget_is_never_exceeded(self):
         from unittest import mock
@@ -343,3 +349,17 @@ class DataHygieneTest(unittest.TestCase):
         self.assertIn("airports.json", removed)
         self.assertFalse(any((out / "flights").glob("*.json")))
         self.assertFalse((out / "featured.json").exists())
+
+
+class OpenSkyAccountTest(unittest.TestCase):
+    def test_new_account_is_not_blocked_by_old_accounts_429(self):
+        from unittest import mock
+        from pipeline import opensky
+        opensky.LEDGER_DIR = Path(tempfile.mkdtemp())
+        old = opensky.OpenSkyClient("old-id", "s")
+        with mock.patch("requests.post", return_value=FakeResp(200, {"access_token": "t", "expires_in": 1800})), \
+             mock.patch("requests.get", return_value=FakeResp(429, headers={"X-Rate-Limit-Retry-After-Seconds": "9000"})):
+            with self.assertRaises(opensky.OpenSkyLimit):
+                old.get("u", {"begin": 0, "end": 7200})
+        self.assertTrue(opensky.OpenSkyClient("old-id", "s").blocked())
+        self.assertFalse(opensky.OpenSkyClient("new-id", "s").blocked())
