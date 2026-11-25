@@ -14,13 +14,14 @@ backfill uses most of a standard allowance. This client:
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import os
 import time
 
 from .common import CACHE, UA, log, read_json, write_json
 
 TOKEN_URL = "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token"
-LEDGER = CACHE / "opensky_budget.json"
+LEDGER_DIR = CACHE
 
 
 class OpenSkyLimit(Exception):
@@ -44,16 +45,21 @@ def credit_cost(begin: int, end: int, now: float | None = None) -> int:
 
 class OpenSkyClient:
     def __init__(self, client_id: str | None, client_secret: str | None, daily_credits: int | None = None,
-                 ledger_path=LEDGER):
+                 ledger_path=None):
         self.client_id, self.client_secret = client_id, client_secret
         default = 3500 if client_id and client_secret else 350
         self.daily = int(daily_credits or os.environ.get("OPENSKY_DAILY_CREDITS") or default)
-        self.ledger_path = ledger_path
+        # one budget file per OpenSky account, so switching accounts starts a fresh budget
+        acct = hashlib.sha256((client_id or "anonymous").encode()).hexdigest()[:10]
+        self.ledger_path = ledger_path or LEDGER_DIR / f"opensky_budget_{acct}.json"
         self._token, self._exp = None, 0.0
         today = dt.datetime.now(dt.timezone.utc).date().isoformat()
-        led = read_json(ledger_path, {}) or {}
+        led = read_json(self.ledger_path, {}) or {}
         self.ledger = {"date": today, "spent": led.get("spent", 0) if led.get("date") == today else 0,
                        "blocked_until": led.get("blocked_until", 0), "remaining": led.get("remaining")}
+        if self.ledger["blocked_until"] and time.time() >= self.ledger["blocked_until"]:
+            # OpenSky said our credits refill at this time: start a fresh budget
+            self.ledger.update(spent=0, blocked_until=0)
         self.requests = 0
         self.stopped_reason = ""
 
@@ -116,7 +122,6 @@ class OpenSkyClient:
                 wait = r.headers.get("X-Rate-Limit-Retry-After-Seconds") or r.headers.get("Retry-After") or "3600"
                 wait = int(float(wait)) if str(wait).replace(".", "", 1).isdigit() else 3600
                 self.ledger["blocked_until"] = int(time.time()) + min(max(wait, 300), 26 * 3600)
-                self.ledger["spent"] = max(self.ledger["spent"], self.daily)  # treat today as used up
                 self._save()
                 self.stopped_reason = f"OpenSky credits exhausted (HTTP 429); retrying in ~{round(wait / 60)} min"
                 log.warning(self.stopped_reason)
