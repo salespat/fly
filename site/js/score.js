@@ -206,22 +206,38 @@ export function sigmetHits(samples, sigmets) {
 /** Python weekday (Mon=0) for a UTC timestamp. */
 export const pyWeekday = (ms) => (new Date(ms).getUTCDay() + 6) % 7;
 
+/** Weekdays (Mon=0) covered by the history dates in a flights file, e.g. ["2026-11-22", ...]. */
+export function coveredWeekdays(days) {
+  return new Set((days || []).map((d) => pyWeekday(Date.parse(`${d}T00:00:00Z`))).filter((x) => !Number.isNaN(x)));
+}
+
 /**
  * Expand the weekly pattern into concrete departures within [startMs, endMs].
  * rows: [[callsign, flightNo, airline, [[wd, depUtcMin, durMin, type], ...]], ...]
+ * covered: Set of weekdays present in the history. If a weekday has NO history yet
+ * (e.g. fewer than 7 days collected), we borrow the nearest weekday's operation and
+ * flag it as estimated. If the weekday IS covered and the flight is absent, it
+ * genuinely didn't operate that day, so we skip it.
  */
-export function upcomingDepartures(rows, startMs, endMs) {
+export function upcomingDepartures(rows, startMs, endMs, covered = null) {
   const out = [];
-  const day0 = Date.UTC(new Date(startMs).getUTCFullYear(), new Date(startMs).getUTCMonth(), new Date(startMs).getUTCDate());
+  const s = new Date(startMs);
+  const day0 = Date.UTC(s.getUTCFullYear(), s.getUTCMonth(), s.getUTCDate());
+  const circ = (a, b) => Math.min((a - b + 7) % 7, (b - a + 7) % 7);
   for (const [callsign, flightNo, airline, occ] of rows || []) {
+    if (!occ?.length) continue;
     for (let k = -1; k <= 3; k++) {
       const midnight = day0 + k * 86400e3;
       const wd = pyWeekday(midnight);
-      const o = occ.find((x) => x[0] === wd);
+      let o = occ.find((x) => x[0] === wd), estimatedFrom = null;
+      if (!o && covered && !covered.has(wd)) {
+        o = [...occ].sort((a, b) => circ(a[0], wd) - circ(b[0], wd))[0];
+        estimatedFrom = o[0];
+      }
       if (!o) continue;
       const depMs = midnight + o[1] * 60e3;
       if (depMs < startMs || depMs > endMs) continue;
-      out.push({ callsign, flightNo, airline, depMs, durMin: o[2], type: o[3] || "", arrMs: depMs + o[2] * 60e3 });
+      out.push({ callsign, flightNo, airline, depMs, durMin: o[2], type: o[3] || "", arrMs: depMs + o[2] * 60e3, estimatedFrom });
     }
   }
   return out.sort((a, b) => a.depMs - b.depMs);

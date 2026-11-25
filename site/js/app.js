@@ -3,6 +3,7 @@ import * as S from "./score.js";
 const DATA = "data/";
 const COLORS = { smooth: "--smooth", light: "--light", choppy: "--choppy", moderate: "--moderate", rough: "--rough" };
 const $ = (id) => document.getElementById(id);
+const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 const state = {
   manifest: null, airports: new Map(), byCode: new Map(), aircraft: null, sigmets: [], status: null,
   grids: new Map(), flightFiles: new Map(), results: [], filter: "all", map: null, mapLayer: null, route: null,
@@ -107,9 +108,11 @@ async function search(ev) {
     }
     const timesMs = state.manifest.times.map((t) => Date.parse(t.t)).sort((a, b) => a - b);
     const now = Date.now();
-    const deps = S.upcomingDepartures(rows, now, timesMs.at(-1));
+    const covered = S.coveredWeekdays(file.days);
+    const deps = S.upcomingDepartures(rows, now, timesMs.at(-1), covered);
     if (!deps.length) {
-      res.innerHTML = `<div class="empty">No departures on this route fall inside the current forecast window (until ${esc(fmtDay(timesMs.at(-1), o.tz))} ${esc(fmtTime(timesMs.at(-1), o.tz))}). Check back later.</div>`;
+      res.innerHTML = `<div class="empty">No departures on this route fall inside the current forecast window (until ${esc(fmtDay(timesMs.at(-1), o.tz))} ${esc(fmtTime(timesMs.at(-1), o.tz))}).
+        Schedule data currently covers ${covered.size} of 7 weekdays (${esc((file.days || []).join(", ") || "none")}). Check back later.</div>`;
       return;
     }
     const need = new Set(deps.flatMap((f) => S.neededTimes(timesMs, f.depMs, f.arrMs)));
@@ -166,7 +169,8 @@ function card(r, rank) {
     <div class="c2"><div class="fl">${esc(name)} <span class="sub">· ${esc(r.airline || "Unknown airline")}</span></div>
       <div class="sub">${esc(fmtDay(r.depMs, o.tz))} · ${esc(fmtTime(r.depMs, o.tz))} → ${esc(fmtTime(r.arrMs, d.tz))} · ${durText(r.durMin)}${r.flightNo ? "" : ` · callsign ${esc(r.callsign)}`}</div></div>
     <div class="c3">${badge(r)} ${r.hits.length ? `<span class="badge b-rough" title="Active turbulence/storm warning on route">⚠ warning</span>` : ""}
-      <div class="sub">${esc(r.ac.name)}${r.type ? " (usually)" : ""} · ${esc(extra)}</div></div>
+      <div class="sub">${esc(r.ac.name)}${r.type ? " (usually)" : ""} · ${esc(extra)}</div>
+      ${r.estimatedFrom != null ? `<div class="sub">Time estimated from its ${WEEKDAYS[r.estimatedFrom]} flight (no data for this weekday yet)</div>` : ""}</div>
     <div class="c4">${spark(r.samples)}</div>
   </button>`;
 }
