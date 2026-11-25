@@ -1,0 +1,9 @@
+{
+  "_help": "Routes that always appear as one-click chips on the site and get extra-thorough flight lookups. Use ICAO or IATA airport codes.",
+  "routes": [
+    ["YYZ", "YYC"],
+    ["YYZ", "AMS"],
+    ["YYC", "YYZ"],
+    ["AMS", "YYZ"]
+  ]
+}

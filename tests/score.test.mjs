@@ -110,3 +110,19 @@ test("demo grid files decode with the manifest", () => {
   const v = S.sampleLevels(layers, man, 47, -100, 360);
   assert.ok(v > 0 && v < 0.7, v);
 });
+
+test("missing weekdays fall back to nearest operation, covered weekdays don't", () => {
+  // History only has Sun (6) + Mon (0); window is Wed 25 -> Thu 26 Nov 2026
+  const covered = S.coveredWeekdays(["2026-11-22", "2026-11-23"]);
+  assert.deepEqual([...covered].sort(), [0, 6]);
+  const start = Date.UTC(2026, 10, 25, 10), end = start + 36 * 3600e3;
+  const rows = [["ACA101", "AC101", "Air Canada", [[0, 12 * 60, 290, "B789"], [6, 13 * 60, 295, "A333"]]]];
+  const deps = S.upcomingDepartures(rows, start, end, covered);
+  assert.deepEqual(deps.map((d) => [new Date(d.depMs).toISOString(), d.type, d.estimatedFrom]), [
+    ["2026-11-25T12:00:00.000Z", "B789", 0],   // Wed borrows Mon
+    ["2026-11-26T12:00:00.000Z", "B789", 0],   // Thu: Mon (3 days) is nearer than Sun (4 days)
+  ]);
+  // Full week of history: Wed is covered and the flight isn't listed, so it's skipped
+  const all = new Set([0, 1, 2, 3, 4, 5, 6]);
+  assert.equal(S.upcomingDepartures(rows, start, end, all).length, 0);
+});

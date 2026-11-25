@@ -157,3 +157,48 @@ class SigmetTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FeaturedRoutesTest(unittest.TestCase):
+    AIRPORTS = {"CYYZ": ["YYZ", "Toronto Pearson", "Toronto", 43.68, -79.63, "America/Toronto"],
+                "CYYC": ["YYC", "Calgary Intl", "Calgary", 51.12, -114.01, "America/Edmonton"],
+                "EHAM": ["AMS", "Schiphol", "Amsterdam", 52.31, 4.76, "Europe/Amsterdam"]}
+
+    def test_load_routes_accepts_iata_and_skips_unknown(self):
+        from pipeline import featured
+        p = Path(tempfile.mkdtemp()) / "r.json"
+        p.write_text(json.dumps({"routes": [["YYZ", "YYC"], ["CYYZ", "EHAM"], ["YYZ", "XXX"], ["YYZ", "YYC"]]}))
+        self.assertEqual(featured.load_routes(self.AIRPORTS, p), [("CYYZ", "CYYC"), ("CYYZ", "EHAM")])
+
+    def test_match_route_merges_endpoints_dedupes_and_stitches(self):
+        from pipeline import featured
+        h = 3600
+        deps = [["a", "ACA131", "CYYZ", "CYYC", 10 * h, 14 * h],      # direct hit
+                ["b", "KLM692", "CYYZ", "", 1 * h, 3 * h],            # arrival unknown (ocean gap)
+                ["c", "ACA405", "CYYZ", "CYUL", 5 * h, 6 * h]]        # other route
+        arrs = [["a", "ACA131", "CYYZ", "CYYC", 10 * h + 60, 14 * h],  # same flight seen at destination
+                ["b", "KLM692", "", "EHAM", 6 * h, 8 * h + 1800],     # second half of KLM692
+                ["d", "WJA663", "CYYZ", "CYYC", 19 * h, 23 * h]]      # only seen at destination
+        self.assertEqual([r[1] for r in featured.match_route("CYYZ", "CYYC", deps, arrs)], ["ACA131", "WJA663"])
+        ams = featured.match_route("CYYZ", "EHAM", deps, arrs)
+        self.assertEqual(ams, [["b", "KLM692", "CYYZ", "EHAM", 1 * h, 8 * h + 1800]])
+
+    def test_empty_two_hour_block_means_day_is_not_cached(self):
+        class Client:
+            calls = 0
+            def flights_all(self, b, e):
+                Client.calls += 1
+                return [] if Client.calls == 5 else [{"icao24": "x", "callsign": "ACA1", "estDepartureAirport": "CYYZ",
+                                                      "estArrivalAirport": "CYYC", "firstSeen": b, "lastSeen": b + 4 * 3600}]
+        os.environ["OPENSKY_SLEEP"] = "0"
+        with self.assertRaises(RuntimeError):
+            flights.fetch_day(Client(), dt.date(2026, 11, 20))
+
+    def test_featured_airports_listed_even_without_flights(self):
+        out = Path(tempfile.mkdtemp())
+        stats = flights.write_index({}, self.AIRPORTS, out, [dt.date(2026, 11, 20)],
+                                    featured=[("CYYZ", "CYYC"), ("CYYZ", "EHAM")])
+        codes = {a[0]: a[-1] for a in json.loads((out / "airports.json").read_text())}
+        self.assertEqual(codes, {"CYYZ": 1, "CYYC": 0, "EHAM": 0})
+        self.assertEqual(json.loads((out / "featured.json").read_text())[1], {"from": "CYYZ", "to": "EHAM", "flights": 0})
+        self.assertEqual(stats["airports"], 3)

@@ -12,7 +12,7 @@ log = logging.getLogger("smoothroute")
 
 ROOT = Path(__file__).resolve().parent.parent
 CACHE = Path(os.environ.get("SMOOTHROUTE_CACHE", ROOT / "pipeline" / ".cache"))
-UA = {"User-Agent": "SmoothRoute/1.0 (+https://github.com/; hobby turbulence site)"}
+UA = {"User-Agent": "Fly/1.0 (hobby turbulence site)"}
 
 
 def ensure_dir(p: Path) -> Path:

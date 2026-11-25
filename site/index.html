@@ -3,69 +3,96 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>SmoothRoute: find the smoothest flight on your route</title>
-  <meta name="description" content="Compare every flight on a route by forecast turbulence and find the smoothest flight, aircraft and seat.">
+  <title>Fly · Find the smoothest flight on your route</title>
+  <meta name="description" content="Fly compares every flight on your route by forecast turbulence and shows the smoothest flight, aircraft and seat.">
+  <meta name="theme-color" content="#cfe5ff">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%2356b4f5'/%3E%3Cstop offset='1' stop-color='%232f7fe0'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='18' fill='url(%23g)'/%3E%3Cpath transform='translate(12 12) scale(1.67) rotate(45 12 12)' fill='white' d='M21 16v-2l-8-5V3.5a1.5 1.5 0 0 0-3 0V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5z'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
   <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-  <header class="top">
-    <div class="wrap">
-      <a class="brand" href="./"><span class="logo" aria-hidden="true">≈</span> SmoothRoute</a>
-      <span class="tag">Which flight on your route will be the smoothest?</span>
-    </div>
+  <div class="sky" aria-hidden="true"><span class="cloud c1"></span><span class="cloud c2"></span><span class="cloud c3"></span></div>
+
+  <header class="top wrap">
+    <a class="brand" href="./" aria-label="Fly home">
+      <span class="logo" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M21 16v-2l-8-5V3.5a1.5 1.5 0 0 0-3 0V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5z"/></svg>
+      </span>
+      Fly
+    </a>
+    <a class="top-link" href="#how">How it works</a>
   </header>
 
   <main class="wrap">
+    <section class="hero">
+      <h1>Find the smoothest flight<br><span>on your route.</span></h1>
+      <p class="lede">Compare every flight between two airports by forecast turbulence, and see which seats ride smoothest.</p>
+    </section>
+
     <div id="banner" class="banner" hidden></div>
 
     <form id="search" class="search" autocomplete="off">
-      <label>From
-        <input id="from" list="from-list" placeholder="e.g. YYZ or Toronto" required>
+      <label class="field">
+        <span class="field-label">From</span>
+        <input id="from" list="from-list" placeholder="City or airport code" required>
         <datalist id="from-list"></datalist>
       </label>
-      <button type="button" id="swap" class="swap" title="Swap airports" aria-label="Swap airports">⇄</button>
-      <label>To
-        <input id="to" list="to-list" placeholder="e.g. YVR or Vancouver" required>
+      <button type="button" id="swap" class="swap" title="Swap airports" aria-label="Swap airports">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h11l-3-3M17 17H6l3 3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <label class="field">
+        <span class="field-label">To</span>
+        <input id="to" list="to-list" placeholder="City or airport code" required>
         <datalist id="to-list"></datalist>
       </label>
-      <button type="submit" class="go">Find smoothest flight</button>
+      <button type="submit" class="go">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M16 16l4 4" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+        <span>Find smooth flights</span>
+      </button>
     </form>
+    <div id="featured" class="featured" hidden></div>
     <p id="meta" class="meta"></p>
 
     <section id="results" class="results" aria-live="polite"></section>
 
     <section id="detail" class="detail" hidden>
+      <h2 id="detail-title" class="detail-title"></h2>
       <div class="detail-grid">
-        <div>
-          <h2 id="detail-title"></h2>
+        <div class="panel map-panel">
           <div id="map" class="map" role="img" aria-label="Route map coloured by forecast turbulence"></div>
           <div class="legend" id="legend"></div>
         </div>
-        <div>
-          <h3>Turbulence along the flight</h3>
-          <div id="profile"></div>
-          <h3>Best seats</h3>
-          <div id="seats"></div>
+        <div class="side">
+          <div class="panel">
+            <h3>Turbulence along the way</h3>
+            <div id="profile"></div>
+          </div>
+          <div class="panel">
+            <h3>Smoothest seats</h3>
+            <div id="seats"></div>
+          </div>
           <div id="warnings"></div>
         </div>
       </div>
     </section>
 
-    <section class="how">
-      <h2>How it works</h2>
-      <ol>
-        <li><b>Flights:</b> we look at which airline flights actually flew your route on the same weekday last week (OpenSky Network) and assume they operate again, usually with the same aircraft type.</li>
-        <li><b>Turbulence:</b> each flight's path (great circle, typical cruise altitude) is checked against the latest NOAA turbulence forecast at the time the plane will be there.</li>
-        <li><b>Aircraft:</b> bigger, heavier planes feel the same air as less bumpy, so we adjust for aircraft type.</li>
-        <li><b>Seats:</b> seats over the wing, near the plane's centre of gravity, move the least.</li>
-      </ol>
-      <p class="fine">For comfort planning only, not a safety tool. Forecasts cover roughly the next 36 hours, and pilots routinely change altitude or route to avoid turbulence. Aircraft types and times are based on last week's operations and can change. Climb and descent are not scored.</p>
+    <section class="how" id="how">
+      <h2>How Fly works</h2>
+      <div class="how-grid">
+        <div class="how-card"><span class="how-ico">🗓️</span><h3>Real flights</h3><p>We check which airline flights flew your route on the same weekday last week, and assume they fly again, usually on the same aircraft.</p></div>
+        <div class="how-card"><span class="how-ico">🌬️</span><h3>Live forecast</h3><p>Each flight's path and cruise altitude is checked against NOAA's latest turbulence forecast for the time it'll be there.</p></div>
+        <div class="how-card"><span class="how-ico">✈️</span><h3>Your aircraft</h3><p>Bigger, heavier planes feel the same air as less bumpy, so every score is adjusted for the aircraft type.</p></div>
+        <div class="how-card"><span class="how-ico">💺</span><h3>Best seat</h3><p>Seats over the wing, near the plane's centre of gravity, move the least. We show where they are.</p></div>
+      </div>
+      <p class="fine">For comfort planning only, not a safety tool. Forecasts cover roughly the next 36 hours, and pilots routinely change altitude or route to avoid turbulence. Aircraft types and times come from last week's operations and can change. Climb and descent are not scored.</p>
     </section>
   </main>
 
   <footer class="wrap foot" id="attrib">
-    Data: NOAA/NWS Aviation Weather Center, NOAA NCEP, OpenSky Network, OurAirports, OpenFlights. Map © OpenStreetMap contributors © CARTO.
+    <span>Fly</span> · Data: NOAA/NWS Aviation Weather Center, NOAA NCEP, OpenSky Network, OurAirports, OpenFlights · Map © OpenStreetMap contributors © CARTO
   </footer>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js" defer></script>

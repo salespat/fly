@@ -77,7 +77,10 @@ def fetch_day(client: OpenSkyClient, day: dt.date) -> list[list]:
     start = int(dt.datetime(day.year, day.month, day.day, tzinfo=dt.timezone.utc).timestamp())
     rows: list[list] = []
     for b in range(start, start + 86400, CHUNK_S):
-        rows += compact(client.flights_all(b, b + CHUNK_S))
+        raw = client.flights_all(b, b + CHUNK_S)
+        if not raw:  # worldwide traffic is never zero: this part isn't processed yet
+            raise RuntimeError(f"empty 2-hour block at {dt.datetime.fromtimestamp(b, dt.timezone.utc):%H:%M} UTC; will retry next run")
+        rows += compact(raw)
         time.sleep(float(os.environ.get("OPENSKY_SLEEP", "2")))
     # de-duplicate (a flight can straddle a chunk boundary)
     seen, uniq = set(), []
@@ -89,14 +92,22 @@ def fetch_day(client: OpenSkyClient, day: dt.date) -> list[list]:
     return uniq
 
 
+def window_days(today: dt.date | None = None) -> tuple[list[dt.date], list[dt.date]]:
+    """(wanted days newest first, the subset that OpenSky should have finished processing)."""
+    now = dt.datetime.now(dt.timezone.utc)
+    today = today or now.date()
+    wanted = [today - dt.timedelta(days=LAG_DAYS + i) for i in range(HISTORY_DAYS)]
+    ready = [d for d in wanted
+             if now >= dt.datetime(d.year, d.month, d.day, tzinfo=dt.timezone.utc) + dt.timedelta(days=1, hours=READY_AFTER_H)]
+    return wanted, ready
+
+
 def update_history(client: OpenSkyClient, today: dt.date | None = None,
                    max_new_days: int = 7) -> list[dt.date]:
     """Fetch missing days; returns the list of days available in the cache window."""
     ensure_dir(DAYS_DIR)
-    now = dt.datetime.now(dt.timezone.utc)
-    today = today or now.date()
-    wanted = [today - dt.timedelta(days=LAG_DAYS + i) for i in range(HISTORY_DAYS)]
-    ready = lambda d: now >= dt.datetime(d.year, d.month, d.day, tzinfo=dt.timezone.utc) + dt.timedelta(days=1, hours=READY_AFTER_H)
+    wanted, ready_days = window_days(today)
+    ready = lambda d: d in ready_days
     fetched = 0
     for day in wanted:  # newest first, so a fresh install gets recent data first
         path = DAYS_DIR / f"{day.isoformat()}.json.gz"
@@ -135,17 +146,18 @@ def flight_number(callsign: str, airlines: dict[str, list]) -> tuple[str, str]:
 
 
 def build_index(days: list[dt.date], airports: dict, airlines: dict, types: dict,
-                days_dir: Path = DAYS_DIR) -> dict[str, dict]:
+                days_dir: Path = DAYS_DIR, extra_rows: list[list] | None = None) -> dict[str, dict]:
     """origin ICAO -> {dest ICAO -> [[callsign, flightNo, airline, [[wd, depMin, durMin, type], ...]]]}"""
     occ: dict = defaultdict(lambda: defaultdict(lambda: defaultdict(dict)))
-    for day in sorted(days):  # older first so newer days overwrite the same weekday
-        for icao24, cs, dep, arr, first, last in read_json(days_dir / f"{day.isoformat()}.json.gz", []):
-            if dep not in airports or arr not in airports:
-                continue
-            t = dt.datetime.fromtimestamp(first, dt.timezone.utc)
-            wd = t.weekday()
-            occ[dep][arr][cs][wd] = [wd, t.hour * 60 + t.minute, round((last - first) / 60),
-                                     types.get(icao24, "")]
+    rows = [r for day in sorted(days) for r in read_json(days_dir / f"{day.isoformat()}.json.gz", [])]
+    rows += sorted(extra_rows or [], key=lambda r: r[4])
+    for icao24, cs, dep, arr, first, last in rows:  # older first so newer days overwrite the same weekday
+        if dep not in airports or arr not in airports:
+            continue
+        t = dt.datetime.fromtimestamp(first, dt.timezone.utc)
+        wd = t.weekday()
+        occ[dep][arr][cs][wd] = [wd, t.hour * 60 + t.minute, round((last - first) / 60),
+                                 types.get(icao24, "")]
     index: dict[str, dict] = {}
     for dep, dests in occ.items():
         index[dep] = {}
@@ -158,18 +170,23 @@ def build_index(days: list[dt.date], airports: dict, airlines: dict, types: dict
     return index
 
 
-def write_index(index: dict, airports: dict, out_dir: Path, days: list[dt.date]) -> dict:
-    """Writes data/flights/<ICAO>.json and data/airports.json; returns summary stats."""
+def write_index(index: dict, airports: dict, out_dir: Path, days: list[dt.date],
+                featured: list[tuple[str, str]] | None = None) -> dict:
+    """Writes data/flights/<ICAO>.json, data/airports.json and data/featured.json; returns stats."""
     fdir = ensure_dir(out_dir / "flights")
     for p in fdir.glob("*.json"):
         p.unlink()
-    used = set(index)
+    featured = [(o, d) for o, d in (featured or []) if o in airports and d in airports]
+    used = set(index) | {c for pair in featured for c in pair}
     for dep, dests in index.items():
         used.update(dests)
         write_json(fdir / f"{dep}.json", {"origin": dep, "days": [d.isoformat() for d in days], "dest": dests})
     # Airport list for autocomplete: [icao, iata, name, city, lat, lon, tz, isOrigin]
-    alist = [[icao, *airports[icao], 1 if icao in index else 0] for icao in sorted(used) if icao in airports]
+    origins = set(index) | {o for o, _ in featured}
+    alist = [[icao, *airports[icao], 1 if icao in origins else 0] for icao in sorted(used) if icao in airports]
     write_json(out_dir / "airports.json", alist)
+    write_json(out_dir / "featured.json", [
+        {"from": o, "to": d, "flights": len(index.get(o, {}).get(d, []))} for o, d in featured])
     n_routes = sum(len(d) for d in index.values())
     n_flights = sum(len(r) for d in index.values() for r in d.values())
     return {"origins": len(index), "routes": n_routes, "flights": n_flights, "airports": len(alist)}
@@ -178,11 +195,16 @@ def write_index(index: dict, airports: dict, out_dir: Path, days: list[dt.date])
 def run(out_dir: Path, airports: dict, airlines: dict, types: dict) -> dict:
     client = OpenSkyClient(os.environ.get("OPENSKY_CLIENT_ID"), os.environ.get("OPENSKY_CLIENT_SECRET"))
     days = update_history(client, max_new_days=int(os.environ.get("OPENSKY_MAX_NEW_DAYS", "7")))
-    if not days:
+    from . import featured
+    routes = featured.load_routes(airports)
+    _, ready = window_days()
+    extra, counts = featured.collect(client, routes, ready)
+    if not days and not extra:
         log.warning("No OpenSky history available; keeping previous flight index if any")
-        return {"days": []}
-    index = build_index(days, airports, airlines, types)
-    stats = write_index(index, airports, out_dir, days)
+        return {"days": [], "featured": counts}
+    index = build_index(days, airports, airlines, types, extra_rows=extra)
+    stats = write_index(index, airports, out_dir, days or ready, featured=routes)
     stats["days"] = [d.isoformat() for d in days]
+    stats["featured"] = {f"{o}-{d}": len(index.get(o, {}).get(d, [])) for o, d in routes}
     log.info("Flight index: %s", stats)
     return stats

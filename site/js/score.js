@@ -1,4 +1,4 @@
-// SmoothRoute scoring engine: pure functions, no DOM. Used by app.js and tests.
+// Fly scoring engine: pure functions, no DOM. Used by app.js and tests.
 
 export const R_KM = 6371;
 export const MIN_SCORED_FL = 250;          // grids cover cruise levels only

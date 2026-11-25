@@ -17,6 +17,7 @@ AIRPORTS = {  # icao: iata, name, city, lat, lon, tz
     "KJFK": ["JFK", "John F. Kennedy International Airport", "New York", 40.6398, -73.7789, "America/New_York"],
     "KLAX": ["LAX", "Los Angeles International Airport", "Los Angeles", 33.9425, -118.4081, "America/Los_Angeles"],
     "KORD": ["ORD", "Chicago O'Hare International Airport", "Chicago", 41.9786, -87.9048, "America/Chicago"],
+    "EHAM": ["AMS", "Amsterdam Airport Schiphol", "Amsterdam", 52.3086, 4.7639, "Europe/Amsterdam"],
     "EGLL": ["LHR", "London Heathrow Airport", "London", 51.4706, -0.4619, "Europe/London"],
 }
 # (origin, dest, callsign, flightNo, airline, depUtcMin, durMin, type)
@@ -35,6 +36,10 @@ FLIGHTS = [
     ("CYYZ", "EGLL", "ACA856", "AC856", "Air Canada", 23 * 60 + 55, 410, "B789"),
     ("CYYZ", "EGLL", "BAW98", "BA98", "British Airways", 0 * 60 + 30, 405, "B77W"),
     ("CYYZ", "KLAX", "ACA791", "AC791", "Air Canada", 15 * 60 + 30, 315, "A321"),
+    ("CYYZ", "EHAM", "ACA824", "AC824", "Air Canada", 23 * 60 + 30, 435, "B789"),
+    ("CYYZ", "EHAM", "KLM692", "KL692", "KLM", 1 * 60 + 15, 430, "B772"),
+    ("CYYC", "CYYZ", "ACA136", "AC136", "Air Canada", 14 * 60 + 0, 215, "A20N"),
+    ("EHAM", "CYYZ", "KLM691", "KL691", "KLM", 13 * 60 + 30, 520, "B772"),
     ("CYVR", "CYYZ", "ACA104", "AC104", "Air Canada", 15 * 60 + 0, 255, "B789"),
     ("CYVR", "CYYZ", "WJA702", "WS702", "WestJet", 18 * 60 + 30, 260, "B38M"),
     ("KJFK", "KLAX", "AAL1", "AA1", "American Airlines", 13 * 60 + 0, 355, "A321"),
@@ -77,6 +82,9 @@ def build_demo(out) -> dict:
         write_json(out / "flights" / f"{o}.json", {"origin": o, "days": days, "dest": dests})
     used = set(index) | {d for v in index.values() for d in v}
     write_json(out / "airports.json", [[k, *AIRPORTS[k], 1 if k in index else 0] for k in sorted(used)])
+    featured = [("CYYZ", "CYYC"), ("CYYZ", "EHAM"), ("CYYC", "CYYZ"), ("EHAM", "CYYZ")]
+    write_json(out / "featured.json", [{"from": o, "to": d, "flights": len(index.get(o, {}).get(d, []))}
+                                       for o, d in featured])
     ts = lambda h: (now + dt.timedelta(hours=h)).strftime("%Y-%m-%dT%H:%M:%SZ")
     write_json(out / "sigmets.json", {"features": [{
         "hazard": "TURB", "severity": "SEV", "baseFt": 28000, "topFt": 38000,

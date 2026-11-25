@@ -7,6 +7,7 @@ const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Satur
 const state = {
   manifest: null, airports: new Map(), byCode: new Map(), aircraft: null, sigmets: [], status: null,
   grids: new Map(), flightFiles: new Map(), results: [], filter: "all", map: null, mapLayer: null, route: null,
+  featured: [],
 };
 
 // ------------------------------------------------------------------ utils
@@ -72,8 +73,32 @@ async function onFromChange() {
   const o = resolveAirport($("from").value);
   if (!o) return;
   const f = await flightFile(o.icao);
-  const dests = f ? Object.keys(f.dest).map((k) => state.airports.get(k)).filter(Boolean) : [];
+  // destinations seen in tracking data + featured routes from this origin (always offered)
+  const codes = new Set([...Object.keys(f?.dest || {}), ...state.featured.filter((r) => r.from === o.icao).map((r) => r.to)]);
+  let dests = [...codes].map((k) => state.airports.get(k)).filter(Boolean);
+  if (!dests.length) dests = [...state.airports.values()].filter((a) => a.icao !== o.icao);
   fillList($("to-list"), dests.sort((a, b) => (a.city || a.name).localeCompare(b.city || b.name)));
+}
+
+function renderFeatured() {
+  const routes = state.featured.filter((r) => state.airports.has(r.from) && state.airports.has(r.to));
+  if (!routes.length) return;
+  const name = (a) => a.city || a.name;
+  $("featured").innerHTML = `<span class="featured-label">Popular routes</span>` + routes.map((r) => {
+    const o = state.airports.get(r.from), d = state.airports.get(r.to);
+    return `<button type="button" class="chip-route" data-from="${esc(r.from)}" data-to="${esc(r.to)}">
+      ${esc(name(o))} <span aria-hidden="true">→</span><span class="sr">to</span> ${esc(name(d))}
+      <small>${esc(o.iata || o.icao)}–${esc(d.iata || d.icao)}</small></button>`;
+  }).join("");
+  $("featured").hidden = false;
+  for (const b of $("featured").querySelectorAll(".chip-route")) {
+    b.addEventListener("click", async () => {
+      $("from").value = airportLabel(state.airports.get(b.dataset.from));
+      $("to").value = airportLabel(state.airports.get(b.dataset.to));
+      await onFromChange();
+      search();
+    });
+  }
 }
 
 // ------------------------------------------------------------------ grids
@@ -97,13 +122,17 @@ async function search(ev) {
   history.replaceState(null, "", `#${o.iata || o.icao}-${d.iata || d.icao}`);
   const btn = document.querySelector(".go");
   btn.disabled = true;
-  res.innerHTML = `<div class="empty"><span class="spinner"></span>Checking flights and forecast…</div>`;
+  res.innerHTML = skeleton(3);
   try {
     const file = await flightFile(o.icao);
     const rows = file?.dest?.[d.icao] || [];
     if (!rows.length) {
-      res.innerHTML = `<div class="empty">No airline flights from ${esc(airportLabel(o))} to ${esc(airportLabel(d))} were seen in the last 7 days of tracking data.
-        This can happen on routes with patchy ADS-B coverage, or with connecting itineraries. Try a nearby airport.</div>`;
+      const isFeatured = state.featured.some((r) => r.from === o.icao && r.to === d.icao);
+      res.innerHTML = isFeatured
+        ? `<div class="empty">Flight data for ${esc(airportLabel(o))} → ${esc(airportLabel(d))} is still being collected.
+            Schedules are learned from the last 7 days of flight tracking, so check back after the next data update (every few hours).</div>`
+        : `<div class="empty">No airline flights from ${esc(airportLabel(o))} to ${esc(airportLabel(d))} were seen in the last 7 days of tracking data.
+            This can happen on routes with patchy ADS-B coverage, or with connecting itineraries. Try a nearby airport.</div>`;
       return;
     }
     const timesMs = state.manifest.times.map((t) => Date.parse(t.t)).sort((a, b) => a - b);
@@ -136,107 +165,135 @@ async function search(ev) {
 }
 
 // ------------------------------------------------------------------ rendering
-function spark(samples, w = 150, h = 40, maxE = 0.5) {
-  const n = samples.length;
+const PLANE = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 16v-2l-8-5V3.5a1.5 1.5 0 0 0-3 0V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5z"/></svg>`;
+let gradId = 0;
+
+/** Smooth area sparkline of felt turbulence along the flight. */
+function spark(samples, w = 170, h = 40, maxE = 0.45) {
+  const n = samples.length, id = `g${++gradId}`;
+  const peak = Math.max(0, ...samples.map((s) => s.felt ?? 0));
+  const col = colorFor(peak);
+  const X = (i) => ((i / (n - 1)) * w).toFixed(1);
+  const Y = (e) => (h - Math.min(1, e / maxE) * (h - 4) - 2).toFixed(1);
   const segs = [];
   let cur = [];
-  samples.forEach((s, i) => {
-    if (s.felt == null) { if (cur.length) segs.push(cur); cur = []; return; }
-    cur.push(`${((i / (n - 1)) * w).toFixed(1)},${(h - Math.min(1, s.felt / maxE) * (h - 2) - 1).toFixed(1)}`);
-  });
+  samples.forEach((s, i) => { if (s.felt == null) { if (cur.length) segs.push(cur); cur = []; } else cur.push([X(i), Y(s.felt)]); });
   if (cur.length) segs.push(cur);
-  const y = (e) => (h - (e / maxE) * (h - 2) - 1).toFixed(1);
-  const peak = Math.max(0, ...samples.map((s) => s.felt ?? 0));
+  const paths = segs.map((p) => {
+    const line = p.map(([x, y], k) => `${k ? "L" : "M"}${x},${y}`).join("");
+    return `<path d="${line}L${p.at(-1)[0]},${h}L${p[0][0]},${h}Z" fill="url(#${id})"/><path d="${line}" fill="none" stroke="${col}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+  }).join("");
   return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true">
-    <line x1="0" x2="${w}" y1="${y(S.LIGHT)}" y2="${y(S.LIGHT)}" stroke="${cssVar("--line")}" stroke-dasharray="3 3"/>
-    <line x1="0" x2="${w}" y1="${y(S.MODERATE)}" y2="${y(S.MODERATE)}" stroke="${cssVar("--line")}" stroke-dasharray="3 3"/>
-    ${segs.map((p) => `<polyline fill="none" stroke="${colorFor(peak)}" stroke-width="2" points="${p.join(" ")}"/>`).join("")}
-  </svg>`;
+    <defs><linearGradient id="${id}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${col}" stop-opacity=".28"/><stop offset="1" stop-color="${col}" stop-opacity="0"/></linearGradient></defs>
+    <line x1="0" x2="${w}" y1="${Y(S.MODERATE)}" y2="${Y(S.MODERATE)}" stroke="#e4edf6" stroke-dasharray="3 4"/>
+    ${paths}</svg>`;
 }
 
-function badge(r) {
-  if (r.coverage < 0.8) return `<span class="badge b-na">Forecast not ready</span>`;
-  return `<span class="badge b-${r.category.key}">${esc(r.category.label)}</span>`;
+function pill(r) {
+  if (r.coverage < 0.8) return `<span class="pill p-na">Forecast not ready</span>`;
+  return `<span class="pill p-${r.category.key}">${esc(r.category.label)}</span>`;
 }
 
 function card(r, rank) {
   const { o, d } = state.route;
   const name = r.flightNo || r.callsign;
-  const extra = r.coverage < 0.8 ? `forecast covers ${Math.round(r.coverage * 100)}% of cruise`
-    : r.minMod ? `≈ ${r.minMod} min of moderate bumps` : r.minLight ? `≈ ${r.minLight} min of light bumps` : "smooth at cruise";
-  return `<button class="card ${rank === 1 ? "best" : ""} ${r.coverage < 0.8 ? "dim" : ""}" data-i="${state.results.indexOf(r)}">
-    <div class="rank">${r.coverage < 0.8 ? "–" : rank}</div>
-    <div class="c2"><div class="fl">${esc(name)} <span class="sub">· ${esc(r.airline || "Unknown airline")}</span></div>
-      <div class="sub">${esc(fmtDay(r.depMs, o.tz))} · ${esc(fmtTime(r.depMs, o.tz))} → ${esc(fmtTime(r.arrMs, d.tz))} · ${durText(r.durMin)}${r.flightNo ? "" : ` · callsign ${esc(r.callsign)}`}</div></div>
-    <div class="c3">${badge(r)} ${r.hits.length ? `<span class="badge b-rough" title="Active turbulence/storm warning on route">⚠ warning</span>` : ""}
-      <div class="sub">${esc(r.ac.name)}${r.type ? " (usually)" : ""} · ${esc(extra)}</div>
-      ${r.estimatedFrom != null ? `<div class="sub">Time estimated from its ${WEEKDAYS[r.estimatedFrom]} flight (no data for this weekday yet)</div>` : ""}</div>
-    <div class="c4">${spark(r.samples)}</div>
+  const bumps = r.coverage < 0.8 ? `Forecast covers ${Math.round(r.coverage * 100)}% of cruise so far`
+    : r.minMod ? `About <b>${r.minMod} min</b> of moderate bumps` : r.minLight ? `About <b>${r.minLight} min</b> of light bumps` : `<b>Smooth</b> at cruise`;
+  const notes = [];
+  if (r.estimatedFrom != null) notes.push(`Time estimated from its ${WEEKDAYS[r.estimatedFrom]} flight (no data for this weekday yet)`);
+  if (!r.flightNo) notes.push(`Callsign ${esc(r.callsign)}`);
+  const best = rank === 1;
+  return `<button class="card ${best ? "best" : ""} ${r.coverage < 0.8 ? "dim" : ""}" data-i="${state.results.indexOf(r)}">
+    ${best ? `<span class="best-tag">Smoothest pick</span>` : ""}
+    <div class="card-top">
+      <div class="rank">${r.coverage < 0.8 ? "·" : rank}</div>
+      <div class="airline"><span class="fno">${esc(name)}</span><span class="aname">${esc(r.airline || "Unknown airline")}</span></div>
+      <div class="pills">${r.hits.length ? `<span class="pill p-warn" title="Active turbulence or storm warning on this route">⚠ Warning on route</span>` : ""}${pill(r)}</div>
+    </div>
+    <div class="times">
+      <div class="t"><b>${esc(fmtTime(r.depMs, o.tz))}</b><small>${esc(o.iata || o.icao)} · ${esc(fmtDay(r.depMs, o.tz))}</small></div>
+      <div class="track"><span>${PLANE}${durText(r.durMin)}</span></div>
+      <div class="t right"><b>${esc(fmtTime(r.arrMs, d.tz))}</b><small>${esc(d.iata || d.icao)} · local time</small></div>
+    </div>
+    <div class="card-bottom">
+      <div><div class="facts"><b>${esc(r.ac.name)}</b>${r.type ? " (usually)" : ""} · ${bumps}</div>
+        ${notes.map((n) => `<div class="note">${n}</div>`).join("")}</div>
+      ${spark(r.samples)}
+    </div>
   </button>`;
 }
 
+function skeleton(n = 3) { return Array.from({ length: n }, () => `<div class="skeleton"></div>`).join(""); }
+
 function render() {
-  const { o } = state.route;
+  const { o, d } = state.route;
   const res = $("results");
   const days = [...new Set(state.results.map((r) => r.dayKey))].sort();
   const pick = state.results.filter((r) => state.filter === "all" || r.dayKey === state.filter);
   const ranked = pick.filter((r) => r.coverage >= 0.8).sort((a, b) => a.index - b.index || a.peak - b.peak);
   const partial = pick.filter((r) => r.coverage < 0.8).sort((a, b) => a.depMs - b.depMs);
-  const tabs = days.length > 1 ? `<div class="sub">Show: ${["all", ...days].map((k) => {
-    const label = k === "all" ? "All" : fmtDay(state.results.find((r) => r.dayKey === k).depMs, o.tz);
-    return `<a href="#" data-day="${k}" style="${k === state.filter ? "font-weight:700" : ""}">${esc(label)}</a>`;
-  }).join(" · ")}</div>` : "";
-  let html = tabs;
-  if (ranked.length) html += `<div class="group-title">Ranked smoothest first</div>` + ranked.map((r, i) => card(r, i + 1)).join("");
+  const seg = days.length > 1 ? `<div class="seg" role="tablist">${["all", ...days].map((k) => {
+    const label = k === "all" ? "All" : fmt(state.results.find((r) => r.dayKey === k).depMs, o.tz, { weekday: "short", day: "numeric" });
+    return `<button type="button" role="tab" data-day="${k}" class="${k === state.filter ? "on" : ""}">${esc(label)}</button>`;
+  }).join("")}</div>` : "";
+  let html = `<div class="results-head"><h2>${esc(o.city || o.iata)} → ${esc(d.city || d.iata)}<span class="count">${ranked.length} flight${ranked.length === 1 ? "" : "s"}, smoothest first</span></h2>${seg}</div>`;
+  if (ranked.length) html += ranked.map((r, i) => card(r, i + 1)).join("");
   else html += `<div class="empty">None of these flights is fully inside the forecast window yet.</div>`;
-  if (partial.length) html += `<div class="group-title">Later flights (forecast not fully available yet)</div>` + partial.map((r) => card(r, 0)).join("");
+  if (partial.length) html += `<div class="section-label">Later flights · forecast not fully available yet</div>` + partial.map((r) => card(r, 0)).join("");
   res.innerHTML = html;
-  res.querySelectorAll(".card").forEach((el) => el.addEventListener("click", () => showDetail(state.results[+el.dataset.i], el)));
-  res.querySelectorAll("[data-day]").forEach((el) => el.addEventListener("click", (e) => { e.preventDefault(); state.filter = el.dataset.day; render(); }));
+  res.querySelectorAll(".card").forEach((el) => el.addEventListener("click", () => {
+    showDetail(state.results[+el.dataset.i], el);
+    $("detail").scrollIntoView({ behavior: "smooth", block: "start" });
+  }));
+  res.querySelectorAll("[data-day]").forEach((el) => el.addEventListener("click", () => { state.filter = el.dataset.day; render(); }));
   if (ranked.length) showDetail(ranked[0], res.querySelector(".card"));
 }
 
 function profileChart(r) {
-  const w = 420, h = 150, pad = { l: 34, r: 8, t: 8, b: 22 }, maxE = 0.5;
+  const w = 420, h = 160, pad = { l: 30, r: 6, t: 10, b: 24 }, maxE = 0.45;
   const { o } = state.route;
   const X = (t) => pad.l + ((t - r.depMs) / (r.arrMs - r.depMs)) * (w - pad.l - pad.r);
   const Y = (e) => pad.t + (1 - Math.min(1, e / maxE)) * (h - pad.t - pad.b);
-  let bands = "", prev = 0;
-  for (const c of S.CATEGORIES) {
-    const top = Math.min(c.max, maxE);
-    bands += `<rect x="${pad.l}" y="${Y(top)}" width="${w - pad.l - pad.r}" height="${Y(prev) - Y(top)}" fill="${cssVar(COLORS[c.key])}" opacity="0.12"/>`;
-    prev = top;
-    if (top >= maxE) break;
-  }
-  const pts = r.samples.filter((s) => s.felt != null).map((s) => `${X(s.tMs).toFixed(1)},${Y(s.felt).toFixed(1)}`).join(" ");
-  const ticks = [0, 0.25, 0.5, 0.75, 1].map((f) => {
+  const col = colorFor(r.peak);
+  const pts = r.samples.filter((s) => s.felt != null);
+  const line = pts.map((s, k) => `${k ? "L" : "M"}${X(s.tMs).toFixed(1)},${Y(s.felt).toFixed(1)}`).join("");
+  const area = pts.length ? `${line}L${X(pts.at(-1).tMs).toFixed(1)},${Y(0)}L${X(pts[0].tMs).toFixed(1)},${Y(0)}Z` : "";
+  const grid = [[0.1, "Light"], [0.2, "Moderate"], [0.4, "Rough"]].map(([e, lbl]) =>
+    `<line x1="${pad.l}" x2="${w - pad.r}" y1="${Y(e)}" y2="${Y(e)}" stroke="#e4edf6" stroke-dasharray="3 4"/>
+     <text x="${w - pad.r}" y="${Y(e) - 4}" font-size="10" text-anchor="end" fill="#9db0c3">${lbl}</text>`).join("");
+  const ticks = [0, 0.5, 1].map((f) => {
     const t = r.depMs + f * (r.arrMs - r.depMs);
-    return `<text x="${X(t)}" y="${h - 6}" font-size="10" text-anchor="middle" fill="${cssVar("--muted")}">${esc(fmtTime(t, o.tz))}</text>`;
+    return `<text x="${X(t)}" y="${h - 6}" font-size="10.5" text-anchor="${f === 0 ? "start" : f === 1 ? "end" : "middle"}" fill="#6f87a0">${esc(fmtTime(t, o.tz))}</text>`;
   }).join("");
-  const yt = [0, 0.1, 0.2, 0.4].map((e) => `<text x="${pad.l - 4}" y="${Y(e) + 3}" font-size="10" text-anchor="end" fill="${cssVar("--muted")}">${e.toFixed(1)}</text>`).join("");
   return `<svg viewBox="0 0 ${w} ${h}" width="100%" role="img" aria-label="Forecast turbulence over the flight">
-    ${bands}${yt}${ticks}<polyline fill="none" stroke="${cssVar("--text")}" stroke-width="1.8" points="${pts}"/></svg>
-    <div class="sub">Felt turbulence intensity (EDR, adjusted for ${esc(r.ac.name)}) vs. time (${esc(o.city || o.iata)} time). Peak ${r.peak.toFixed(2)}, average ${r.mean.toFixed(2)}. Times shown in departure-city time; climb and descent not scored.</div>`;
+    <defs><linearGradient id="pf" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${col}" stop-opacity=".32"/><stop offset="1" stop-color="${col}" stop-opacity=".02"/></linearGradient></defs>
+    ${grid}<line x1="${pad.l}" x2="${w - pad.r}" y1="${Y(0)}" y2="${Y(0)}" stroke="#d5e2ef"/>
+    <path d="${area}" fill="url(#pf)"/><path d="${line}" fill="none" stroke="${col}" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"/>
+    ${ticks}</svg>
+    <div class="chart-note">Felt turbulence for a ${esc(r.ac.name)}, in ${esc(o.city || o.iata)} time. Peak ${r.peak.toFixed(2)} · average ${r.mean.toFixed(2)} EDR. Climb and descent not scored.</div>`;
 }
 
 function seatPanel(r) {
   const ac = r.ac, tip = state.aircraft?.tips?.[ac.cls] || "";
   const [ws, we] = ac.wing || [0.36, 0.56];
-  const w = 420, h = 110, x0 = 30, x1 = 400, cab = (f) => x0 + 20 + f * (x1 - x0 - 50);
+  const w = 420, h = 120, x0 = 26, x1 = 404, cab = (f) => x0 + 30 + f * (x1 - x0 - 60);
   const smoother = ac.factor < 1 ? `Rides roughly ${Math.round((1 - ac.factor) * 100)}% smoother than a typical A320/737 in the same air.`
-    : ac.factor > 1 ? `Feels roughly ${Math.round((ac.factor - 1) * 100)}% bumpier than a typical A320/737 in the same air.` : "Typical single-aisle ride.";
-  return `<div class="seatmap"><svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Cabin diagram showing smoothest seats over the wing">
-      <polygon points="${cab(ws)},50 ${cab(we)},50 ${cab(we) + 40},104 ${cab(ws) + 18},104" fill="${cssVar("--line")}"/>
-      <polygon points="${cab(ws)},46 ${cab(we)},46 ${cab(we) + 40},6 ${cab(ws) + 18},6" fill="${cssVar("--line")}"/>
-      <rect x="${x0}" y="34" width="${x1 - x0}" height="28" rx="14" fill="${cssVar("--card")}" stroke="${cssVar("--muted")}"/>
-      <rect x="${cab(ws)}" y="36" width="${cab(we) - cab(ws)}" height="24" fill="${cssVar("--smooth")}" opacity="0.55"/>
-      <rect x="${cab(0.82)}" y="36" width="${cab(1) - cab(0.82)}" height="24" fill="${cssVar("--rough")}" opacity="0.35"/>
-      <text x="${x0 + 6}" y="52" font-size="10" fill="${cssVar("--muted")}">nose</text>
-      <text x="${(cab(ws) + cab(we)) / 2}" y="52" font-size="11" text-anchor="middle" font-weight="700" fill="${cssVar("--text")}">smoothest</text>
-      <text x="${(cab(0.82) + cab(1)) / 2}" y="52" font-size="10" text-anchor="middle" fill="${cssVar("--text")}">bumpiest</text>
+    : ac.factor > 1 ? `Feels roughly ${Math.round((ac.factor - 1) * 100)}% bumpier than a typical A320/737 in the same air.` : "A typical single-aisle ride.";
+  const smooth = cssVar("--smooth"), rough = cssVar("--rough");
+  return `<div class="seatmap"><svg viewBox="0 0 ${w} ${h}" role="img" aria-label="Cabin diagram: smoothest seats are over the wing">
+      <path d="M${cab(ws)},52 L${cab(we)},52 L${cab(we) + 44},112 L${cab(ws) + 20},112 Z" fill="#e6effa"/>
+      <path d="M${cab(ws)},68 L${cab(we)},68 L${cab(we) + 44},8 L${cab(ws) + 20},8 Z" fill="#e6effa"/>
+      <path d="M${x1 - 30},60 L${x1 + 8},38 L${x1 + 8},82 Z" fill="#e6effa"/>
+      <rect x="${x0}" y="44" width="${x1 - x0}" height="32" rx="16" fill="#fff" stroke="#cfdcea" stroke-width="1.5"/>
+      <rect x="${cab(ws)}" y="47" width="${cab(we) - cab(ws)}" height="26" rx="6" fill="${smooth}" opacity=".22"/>
+      <rect x="${cab(0.82)}" y="47" width="${cab(1) - cab(0.82)}" height="26" rx="6" fill="${rough}" opacity=".16"/>
+      ${Array.from({ length: 22 }, (_, i) => `<circle cx="${cab(i / 21)}" cy="60" r="2.2" fill="#c5d4e4"/>`).join("")}
+      <text x="${(cab(ws) + cab(we)) / 2}" y="40" font-size="11.5" text-anchor="middle" font-weight="700" fill="${smooth}">Smoothest</text>
+      <text x="${(cab(0.82) + cab(1)) / 2}" y="40" font-size="11" text-anchor="middle" font-weight="600" fill="${rough}">Bumpiest</text>
+      <text x="${x0 + 6}" y="96" font-size="10" fill="#9db0c3">Front</text>
     </svg></div>
-    <p class="tip"><b>${esc(ac.name)}:</b> ${esc(tip)} ${esc(smoother)}</p>
-    <p class="sub">Wing position is approximate. Check your airline's seat map for exact row numbers.${ac.known ? "" : " (Aircraft type not in our table; using single-aisle defaults.)"}</p>`;
+    <p class="tip"><b>${esc(ac.name)}.</b> ${esc(tip)} ${esc(smoother)}</p>
+    <p class="sub">Wing position is approximate. Check your airline's seat map for exact rows.${ac.known ? "" : " (Aircraft not in our table, so single-aisle defaults are used.)"}</p>`;
 }
 
 function shiftRingNear(ring, lonRef) {
@@ -249,33 +306,34 @@ function drawMap(r) {
   const el = $("map");
   if (!window.L) { el.innerHTML = `<div class="empty">Map unavailable (map library failed to load).</div>`; return; }
   if (!state.map) {
-    state.map = L.map(el, { worldCopyJump: false, scrollWheelZoom: false });
-    const dark = matchMedia("(prefers-color-scheme: dark)").matches;
-    L.tileLayer(`https://{s}.basemaps.cartocdn.com/${dark ? "dark_all" : "light_all"}/{z}/{x}/{y}{r}.png`, {
+    state.map = L.map(el, { worldCopyJump: false, scrollWheelZoom: false, zoomControl: true });
+    L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png", {
       attribution: "© OpenStreetMap contributors © CARTO", subdomains: "abcd", maxZoom: 10 }).addTo(state.map);
   }
   state.mapLayer?.remove();
   const g = L.layerGroup().addTo(state.map);
   state.mapLayer = g;
   const s = r.samples;
+  L.polyline(s.map((p) => [p.lat, p.lon]), { color: "#ffffff", weight: 11, opacity: 0.9 }).addTo(g);  // soft halo
   for (let i = 0; i < s.length - 1; i++) {
     L.polyline([[s[i].lat, s[i].lon], [s[i + 1].lat, s[i + 1].lon]], {
-      color: colorFor(s[i].felt), weight: s[i].felt == null ? 3 : 6, opacity: 0.95, dashArray: s[i].felt == null ? "4 6" : null,
+      color: s[i].felt == null ? "#9db0c3" : colorFor(s[i].felt), weight: s[i].felt == null ? 3 : 6, opacity: 1,
+      dashArray: s[i].felt == null ? "2 7" : null, lineCap: "round",
     }).addTo(g);
   }
   const { o, d } = state.route;
   const midLon = s[Math.floor(s.length / 2)].lon;
   for (const sig of state.sigmets) {
-    const hit = r.hits.includes(sig) || r.hits.some((h) => h.rings === sig.rings);
+    const hit = r.hits.some((h) => h.rings === sig.rings);
     for (const ring of sig.rings) {
-      const latlngs = shiftRingNear(ring, midLon);
-      L.polygon(latlngs, { color: cssVar("--rough"), weight: hit ? 2 : 1, fillOpacity: hit ? 0.18 : 0.05, opacity: hit ? 0.9 : 0.35 })
+      L.polygon(shiftRingNear(ring, midLon), { color: cssVar("--rough"), weight: hit ? 1.5 : 1, fillOpacity: hit ? 0.14 : 0.05, opacity: hit ? 0.8 : 0.3, dashArray: "4 4" })
         .bindTooltip(`${esc(sig.severity)} ${sig.hazard === "TURB" ? "turbulence" : "thunderstorm"} warning ${sig.fir ? `(${esc(sig.fir)})` : ""}`).addTo(g);
     }
   }
-  L.circleMarker([s[0].lat, s[0].lon], { radius: 5, color: cssVar("--text") }).bindTooltip(o.iata || o.icao, { permanent: true, direction: "left" }).addTo(g);
-  L.circleMarker([s.at(-1).lat, s.at(-1).lon], { radius: 5, color: cssVar("--text") }).bindTooltip(d.iata || d.icao, { permanent: true, direction: "right" }).addTo(g);
-  state.map.fitBounds(L.latLngBounds(s.map((p) => [p.lat, p.lon])).pad(0.15));
+  const pin = { radius: 6, color: "#fff", weight: 3, fillColor: cssVar("--accent"), fillOpacity: 1 };
+  L.circleMarker([s[0].lat, s[0].lon], pin).bindTooltip(o.iata || o.icao, { permanent: true, direction: "left" }).addTo(g);
+  L.circleMarker([s.at(-1).lat, s.at(-1).lon], pin).bindTooltip(d.iata || d.icao, { permanent: true, direction: "right" }).addTo(g);
+  state.map.fitBounds(L.latLngBounds(s.map((p) => [p.lat, p.lon])).pad(0.18));
   setTimeout(() => state.map.invalidateSize(), 50);
 }
 
@@ -285,9 +343,9 @@ function showDetail(r, el) {
   el?.classList.add("active");
   const { o, d } = state.route;
   $("detail").hidden = false;
-  $("detail-title").textContent = `${r.flightNo || r.callsign} · ${o.iata || o.icao} → ${d.iata || d.icao} · ${fmtDay(r.depMs, o.tz)} ${fmtTime(r.depMs, o.tz)}`;
+  $("detail-title").textContent = `${r.flightNo || r.callsign} · ${o.iata || o.icao} → ${d.iata || d.icao} · ${fmtDay(r.depMs, o.tz)}, ${fmtTime(r.depMs, o.tz)}`;
   $("legend").innerHTML = S.CATEGORIES.map((c) => `<span><i style="background:${cssVar(COLORS[c.key])}"></i>${esc(c.label)}</span>`).join("") +
-    `<span><i style="background:${cssVar("--muted")}"></i>Climb/descent or no forecast</span>`;
+    `<span><i style="background:#9db0c3"></i>Climb, descent or no forecast</span>`;
   $("profile").innerHTML = profileChart(r);
   $("seats").innerHTML = seatPanel(r);
   $("warnings").innerHTML = r.hits.map((h) => `<div class="warn">⚠ Active ${esc(h.severity)} ${h.hazard === "TURB" ? "turbulence" : "thunderstorm"} warning${h.fir ? ` (${esc(h.fir)})` : ""}
@@ -297,11 +355,12 @@ function showDetail(r, el) {
 
 // ------------------------------------------------------------------ init
 async function init() {
-  const [manifest, airports, aircraft, sigmets, status] = await Promise.all([
+  const [manifest, airports, aircraft, sigmets, status, featured] = await Promise.all([
     getJSON("turb/manifest.json").catch(() => null), getJSON("airports.json").catch(() => []),
     getJSON("aircraft.json").catch(() => ({})), getJSON("sigmets.json").catch(() => ({ features: [] })),
-    getJSON("status.json").catch(() => null)]);
-  Object.assign(state, { manifest, aircraft, sigmets: sigmets.features || [], status });
+    getJSON("status.json").catch(() => null), getJSON("featured.json").catch(() => [])]);
+  Object.assign(state, { manifest, aircraft, sigmets: sigmets.features || [], status,
+    featured: Array.isArray(featured) ? featured : [] });
   for (const [icao, iata, name, city, lat, lon, tz, isOrigin] of airports) {
     const a = { icao, iata, name, city, lat, lon, tz, isOrigin: !!isOrigin };
     state.airports.set(icao, a);
@@ -311,6 +370,7 @@ async function init() {
   const all = [...state.airports.values()].sort((a, b) => (a.city || a.name).localeCompare(b.city || b.name));
   fillList($("from-list"), all.filter((a) => a.isOrigin));
   fillList($("to-list"), all);
+  renderFeatured();
 
   const banner = [];
   if (manifest?.demo || status?.demo) banner.push("<b>Demo mode:</b> the flights and turbulence shown are synthetic sample data, not a real forecast.");

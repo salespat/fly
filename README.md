@@ -1,6 +1,6 @@
-# SmoothRoute
+# Fly
 
-Pick a route (e.g. **YYZ → YVR**). SmoothRoute ranks every flight on that route in the next ~36 hours by forecast turbulence, adjusted for the aircraft type, and shows the smoothest seats.
+Pick a route (e.g. **YYZ → YVR**). Fly ranks every flight on that route in the next ~36 hours by forecast turbulence, adjusted for the aircraft type, and shows the smoothest seats.
 
 * Fully static: **GitHub Actions** builds the data every 3 hours, **GitHub Pages** hosts it. No server, no database.
 * Free data only: NOAA (turbulence, warnings), OpenSky Network (flights), OurAirports/OpenFlights (reference data).
@@ -56,6 +56,12 @@ The page header always shows which source is live. Both sources are converted to
 ## How flights work
 
 OpenSky only records past flights. Each day the pipeline fetches yesterday's flights (12 two-hour requests), keeps a rolling 7 days, and builds one file per origin airport. The site assumes the same callsigns fly again on the same weekday, usually with the same aircraft type, and labels them that way.
+
+### Featured routes (always shown)
+
+`featured_routes.json` lists routes that always appear as one-click "Popular routes" chips and are always offered in the airport dropdowns. Currently: Toronto–Calgary and Toronto–Amsterdam, in both directions. For these routes the pipeline also queries OpenSky's per-airport departure and arrival lists, and joins the two halves of flights that OpenSky splits on long ocean crossings. This makes them much less likely to be missing. To change them, edit the file (IATA codes such as `YYZ` work) and push. The next build picks up the change.
+
+A day of tracking data is only saved when all twelve 2-hour blocks came back. Empty blocks (not processed yet by OpenSky) are retried on the next run, so no flights are silently lost.
 
 Known gaps: routes with weak ADS-B coverage (oceans, parts of Africa and Asia) may be missing. Alphanumeric callsigns (e.g. `RYR5UK`) can't be mapped to flight numbers, so the site shows the callsign instead.
 

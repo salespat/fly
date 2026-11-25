@@ -13,14 +13,6 @@
   "missing": 255,
   "times": [
     {
-      "t": "2026-11-24T15:00Z",
-      "file": "turb/2026112415.bin.gz"
-    },
-    {
-      "t": "2026-11-24T18:00Z",
-      "file": "turb/2026112418.bin.gz"
-    },
-    {
       "t": "2026-11-24T21:00Z",
       "file": "turb/2026112421.bin.gz"
     },
@@ -71,9 +63,17 @@
     {
       "t": "2026-11-26T09:00Z",
       "file": "turb/2026112609.bin.gz"
+    },
+    {
+      "t": "2026-11-26T12:00Z",
+      "file": "turb/2026112612.bin.gz"
+    },
+    {
+      "t": "2026-11-26T15:00Z",
+      "file": "turb/2026112615.bin.gz"
     }
   ],
-  "generated": "2026-11-24T18:05Z",
+  "generated": "2026-11-25T00:54Z",
   "source": "DEMO synthetic turbulence (not a forecast)",
   "sourceId": "demo",
   "demo": true
